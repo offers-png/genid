@@ -1,11 +1,12 @@
-import type { NextConfig } from 'next'
-import path from 'path'
+import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ['sharp'],
+  output: "export",
+  serverExternalPackages: ["sharp"],
   turbopack: {
     root: path.resolve(__dirname),
   },
-}
+};
 
-export default nextConfig
+export default nextConfig;
