@@ -1,4 +1,4 @@
-export default function Home() {
+————export default function Home() {
   return (
     <div className="max-w-6xl mx-auto px-6 py-20">
       {/* Hero */}
