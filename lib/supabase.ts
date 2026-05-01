@@ -31,6 +31,9 @@ export interface ContentLogRecord {
   platform: string
   blockchain_tx_hash: string | null
   blockchain_network: string
+  notary_signature?: string | null
+  notary_timestamp?: number | null
+  notary_hash?: string | null
   created_at: string
 }
 

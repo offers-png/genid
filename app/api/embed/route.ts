@@ -64,6 +64,9 @@ export async function POST(req: NextRequest) {
       platform: 'GENID Protocol',
       blockchain_tx_hash: txHash,
       blockchain_network: 'polygon',
+      notary_signature: notaryPayload,
+      notary_timestamp: timestamp,
+      notary_hash: originalHash,
     })
 
     const originalBase = imageFile.name.replace(/\.[^.]+$/, '')
