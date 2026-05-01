@@ -14,6 +14,9 @@ interface VerifyResult {
   blockchainTxHash?: string
   stampedAt?: string
   platform?: string
+  signaturePresent?: boolean
+  signatureValid?: boolean
+  embeddedHash?: string | null
   message: string
 }
 
@@ -165,6 +168,24 @@ export default function VerifyPage() {
             <div className="bg-gray-800 rounded-lg p-4">
               <div className="text-xs text-gray-500 mb-1 font-mono">PLATFORM</div>
               <div className="text-white text-sm">{result.platform ?? 'GENID Protocol'}</div>
+            </div>
+          </div>
+
+          <div className="bg-gray-800 rounded-lg p-4">
+            <div className="text-xs text-gray-500 mb-1 font-mono">NOTARY SIGNATURE</div>
+            <div className={`font-semibold ${result.signatureValid ? 'text-green-400' : result.signaturePresent ? 'text-red-400' : 'text-yellow-400'}`}>
+              {result.signatureValid
+                ? '✓ Cryptographically Verified'
+                : result.signaturePresent
+                  ? '✗ Signature Invalid (Tampered)'
+                  : '⚠ No Notary Signature (Legacy Stamp)'}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              {result.signatureValid
+                ? 'HMAC-SHA256 verified against the GENID server. This payload cannot be forged.'
+                : result.signaturePresent
+                  ? 'A signature was found but did not validate. The image may have been re-stamped or the secret rotated.'
+                  : 'GENID code valid, but no HMAC signature was embedded. Stamped before the notary feature shipped.'}
             </div>
           </div>
 
