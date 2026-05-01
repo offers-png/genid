@@ -3,7 +3,7 @@
     <div className="max-w-6xl mx-auto px-6 py-20">
       {/* Hero */}
       <div className="text-center mb-20">
-        <div className="inline-flex items-center gap-2 bg-violet-950/50 border border-violet-800 rounded-full px-4 py-1.5 text-sm text-violet-300 mb-6">
+                <div className="inline-flex items-center gap-2 bg-violet-100 border border-violet-300 rounded-full px-4 py-1.5 text-sm text-violet-700 mb-6"></div>
           <span className="w-2 h-2 bg-violet-400 rounded-full animate-pulse"></span>
           Patent Pending &mdash; Priority Date April 27, 2026
         </div>
