@@ -18,6 +18,9 @@ export default function RegisterPage() {
 
     try {
       const res = await fetch('/api/stripe/session', {
+
+    try {
+      const res = await fetch('/api/stripe/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fullName, email }),
