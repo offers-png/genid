@@ -28,12 +28,29 @@ export async function POST(req: NextRequest) {
     // Pre-create the registry record (unverified) so we can link it after Stripe callback
     if (!existing) {
       const genidCode = await issueUniqueGenid(fullName)
-      await supabaseAdmin.from('genid_registry').insert({
+      const { error: insertError } = await supabaseAdmin.from('genid_registry').insert({
         genid_code: genidCode,
         user_name: fullName,
         email,
         verified: false,
+        verification_status: 'pending',
       })
+
+      if (insertError) {
+        if (insertError.code !== '23505') { // unique_violation — another request beat us to it
+          console.error('Failed to create registry record:', insertError)
+          return NextResponse.json(
+            { error: 'Failed to initialize registration. Please try again.' },
+            { status: 500 }
+          )
+        }
+        // Duplicate — user already exists; reset to pending in case they re-register
+        await supabaseAdmin
+          .from('genid_registry')
+          .update({ verification_status: 'pending' })
+          .eq('email', email)
+          .eq('verified', false) // never modify a verified record
+      }
     }
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'

@@ -3,12 +3,13 @@
 import { Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 
-type Status = 'polling' | 'success' | 'timeout' | 'error'
+type Status = 'polling' | 'success' | 'timeout' | 'error' | 'failed' | 'canceled'
 
 interface RegistrationResult {
   genid_code: string
   user_name: string
   verified: boolean
+  verification_status: string
   created_at: string
 }
 
@@ -18,6 +19,7 @@ function CallbackContent() {
   const [status, setStatus] = useState<Status>('polling')
   const [result, setResult] = useState<RegistrationResult | null>(null)
   const [attempts, setAttempts] = useState(0)
+  const [failureReason, setFailureReason] = useState('')
 
   const MAX_ATTEMPTS = 20      // 20 attempts
   const POLL_INTERVAL = 3000   // every 3 seconds = 60 seconds max
@@ -51,6 +53,15 @@ function CallbackContent() {
             setStatus('success')
             return
           }
+          if (data.verification_status?.startsWith('failed:')) {
+            setFailureReason(data.verification_status.replace('failed:', ''))
+            setStatus('failed')
+            return
+          }
+          if (data.verification_status === 'canceled') {
+            setStatus('canceled')
+            return
+          }
         }
       } catch {
         // network error, keep polling
@@ -79,6 +90,39 @@ function CallbackContent() {
         </div>
         <a href="/embed" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
           Stamp Your First Image →
+        </a>
+      </div>
+    )
+  }
+
+  if (status === 'failed') {
+    return (
+      <div className="max-w-lg mx-auto px-6 py-20 text-center">
+        <div className="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
+          <span className="text-white text-2xl">✕</span>
+        </div>
+        <h2 className="text-2xl font-bold text-white mb-4">Verification Failed</h2>
+        <p className="text-gray-400 mb-2">Stripe could not verify your identity.</p>
+        <p className="text-gray-500 text-sm mb-6">
+          Reason: {failureReason.replace(/_/g, ' ')}
+        </p>
+        <a href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
+          Try Again
+        </a>
+      </div>
+    )
+  }
+
+  if (status === 'canceled') {
+    return (
+      <div className="max-w-lg mx-auto px-6 py-20 text-center">
+        <div className="w-16 h-16 bg-yellow-500 rounded-full flex items-center justify-center mx-auto mb-6">
+          <span className="text-white text-2xl">—</span>
+        </div>
+        <h2 className="text-2xl font-bold text-white mb-4">Verification Canceled</h2>
+        <p className="text-gray-400 mb-6">You canceled the identity verification process.</p>
+        <a href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
+          Start Again
         </a>
       </div>
     )

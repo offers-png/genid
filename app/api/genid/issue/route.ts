@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await supabaseAdmin
     .from('genid_registry')
-    .select('genid_code, user_name, verified, created_at')
+    .select('genid_code, user_name, verified, verification_status, created_at')
     .eq('email', email)
     .single()
 

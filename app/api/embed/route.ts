@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { embedGenid, hashBuffer, generateNotarySignature } from '@/lib/steganography'
 import { lookupByEmail, logContent } from '@/lib/supabase'
 import { stampOnBlockchain } from '@/lib/blockchain'
+import { env } from '@/lib/env'
 
 // POST multipart/form-data: { email, image }
 // Returns: the steganographically-stamped image with embedded notary signature
@@ -28,7 +29,7 @@ export async function POST(req: NextRequest) {
     const originalHash = hashBuffer(imageBuffer)
     const timestamp = Math.floor(Date.now() / 1000)
 
-    const signingSecret = process.env.GENID_SIGNING_SECRET ?? 'genid-default-secret'
+    const signingSecret = env.genidSigningSecret
     const notaryPayload = generateNotarySignature(
       record.genid_code,
       originalHash,

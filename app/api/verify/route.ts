@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { extractGenid, hashBuffer, verifyNotarySignature } from '@/lib/steganography'
 import { lookupGenid, supabaseAdmin } from '@/lib/supabase'
+import { env } from '@/lib/env'
 
 // POST multipart/form-data: { image }
 // Returns: creator info if GENID found, plus signature verification status.
@@ -42,7 +43,7 @@ export async function POST(req: NextRequest) {
     let signaturePresent = false
     if (extracted.signature && extracted.timestamp && extracted.hash) {
       signaturePresent = true
-      const signingSecret = process.env.GENID_SIGNING_SECRET ?? 'genid-default-secret'
+      const signingSecret = env.genidSigningSecret
       signatureValid = verifyNotarySignature(
         extracted.code,
         extracted.hash,
