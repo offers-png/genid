@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef } from 'react'
+import Image from 'next/image'
 
 type Status = 'idle' | 'checking' | 'found' | 'not_found' | 'error'
 
@@ -98,7 +99,7 @@ export default function VerifyPage() {
         >
           {preview ? (
             <div className="space-y-3">
-              <img src={preview} alt="Preview" className="max-h-56 mx-auto rounded-lg object-contain" />
+              <Image src={preview} alt="Preview" width={400} height={224} className="max-h-56 mx-auto rounded-lg object-contain" unoptimized />
               <p className="text-sm text-gray-400">{image?.name} &mdash; click to change</p>
             </div>
           ) : (
