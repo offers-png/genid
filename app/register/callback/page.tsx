@@ -1,7 +1,8 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 
 type Status = 'polling' | 'success' | 'timeout' | 'error' | 'failed' | 'canceled'
 
@@ -13,28 +14,29 @@ interface RegistrationResult {
   created_at: string
 }
 
+const MAX_ATTEMPTS = 20
+const POLL_INTERVAL = 3000
+
 function CallbackContent() {
   const searchParams = useSearchParams()
   const email = searchParams.get('email') ?? ''
-  const [status, setStatus] = useState<Status>('polling')
+
+  const [status, setStatus] = useState<Status>(() => (email ? 'polling' : 'error'))
   const [result, setResult] = useState<RegistrationResult | null>(null)
   const [attempts, setAttempts] = useState(0)
   const [failureReason, setFailureReason] = useState('')
 
-  const MAX_ATTEMPTS = 20      // 20 attempts
-  const POLL_INTERVAL = 3000   // every 3 seconds = 60 seconds max
+  // Use a ref so the poll closure always reads the latest cancelled value
+  const cancelledRef = useRef(false)
 
   useEffect(() => {
-    if (!email) {
-      setStatus('error')
-      return
-    }
+    if (!email) return
 
-    let cancelled = false
+    cancelledRef.current = false
     let attemptCount = 0
 
     async function poll() {
-      if (cancelled) return
+      if (cancelledRef.current) return
 
       attemptCount++
       setAttempts(attemptCount)
@@ -47,24 +49,27 @@ function CallbackContent() {
       try {
         const res = await fetch(`/api/genid/issue?email=${encodeURIComponent(email)}`)
         if (res.ok) {
-          const data = await res.json()
+          const data: RegistrationResult = await res.json()
+
           if (data.verified) {
             setResult(data)
             setStatus('success')
             return
           }
-          if (data.verification_status?.startsWith('failed:')) {
-            setFailureReason(data.verification_status.replace('failed:', ''))
+
+          const vs = data.verification_status ?? ''
+          if (vs.startsWith('failed:')) {
+            setFailureReason(vs.replace('failed:', ''))
             setStatus('failed')
             return
           }
-          if (data.verification_status === 'canceled') {
+          if (vs === 'canceled') {
             setStatus('canceled')
             return
           }
         }
       } catch {
-        // network error, keep polling
+        // network hiccup — keep polling
       }
 
       setTimeout(poll, POLL_INTERVAL)
@@ -72,7 +77,9 @@ function CallbackContent() {
 
     poll()
 
-    return () => { cancelled = true }
+    return () => {
+      cancelledRef.current = true
+    }
   }, [email])
 
   if (status === 'success' && result) {
@@ -88,9 +95,9 @@ function CallbackContent() {
           <p className="text-4xl font-mono font-bold text-violet-400">{result.genid_code}</p>
           <p className="text-gray-500 text-sm mt-3">Issued to {result.user_name} · Identity Verified</p>
         </div>
-        <a href="/embed" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
+        <Link href="/embed" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
           Stamp Your First Image →
-        </a>
+        </Link>
       </div>
     )
   }
@@ -106,9 +113,9 @@ function CallbackContent() {
         <p className="text-gray-500 text-sm mb-6">
           Reason: {failureReason.replace(/_/g, ' ')}
         </p>
-        <a href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
+        <Link href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
           Try Again
-        </a>
+        </Link>
       </div>
     )
   }
@@ -121,9 +128,9 @@ function CallbackContent() {
         </div>
         <h2 className="text-2xl font-bold text-white mb-4">Verification Canceled</h2>
         <p className="text-gray-400 mb-6">You canceled the identity verification process.</p>
-        <a href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
+        <Link href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
           Start Again
-        </a>
+        </Link>
       </div>
     )
   }
@@ -139,13 +146,15 @@ function CallbackContent() {
           Stripe is still processing your documents. This can take a few minutes.
           Your GENID has been reserved — check back soon.
         </p>
-        <a href={`/register/callback?email=${encodeURIComponent(email)}`}
-           className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors mr-3">
+        <Link
+          href={`/register/callback?email=${encodeURIComponent(email)}`}
+          className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors mr-3"
+        >
           Check Again
-        </a>
-        <a href="/" className="border border-gray-600 text-gray-300 px-8 py-3 rounded-lg font-medium transition-colors">
+        </Link>
+        <Link href="/" className="border border-gray-600 text-gray-300 px-8 py-3 rounded-lg font-medium transition-colors">
           Return Home
-        </a>
+        </Link>
       </div>
     )
   }
@@ -156,9 +165,9 @@ function CallbackContent() {
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-8">
           <h2 className="text-xl font-bold text-white mb-4">Something Went Wrong</h2>
           <p className="text-gray-400 mb-6">No registration found for this email.</p>
-          <a href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
+          <Link href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
             Try Again
-          </a>
+          </Link>
         </div>
       </div>
     )

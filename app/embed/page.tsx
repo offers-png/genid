@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef } from 'react'
+import Image from 'next/image'
 
 type Status = 'idle' | 'uploading' | 'success' | 'error'
 
@@ -122,7 +123,7 @@ export default function EmbedPage() {
             >
               {preview ? (
                 <div className="space-y-3">
-                  <img src={preview} alt="Preview" className="max-h-48 mx-auto rounded-lg object-contain" />
+                  <Image src={preview} alt="Preview" width={400} height={192} className="max-h-48 mx-auto rounded-lg object-contain" unoptimized />
                   <p className="text-sm text-gray-400">{image?.name} &mdash; click to change</p>
                 </div>
               ) : (
