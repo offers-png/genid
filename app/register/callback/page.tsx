@@ -3,7 +3,9 @@
 import { Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 
-interface GenidResult {
+type Status = 'polling' | 'success' | 'timeout' | 'error'
+
+interface RegistrationResult {
   genid_code: string
   user_name: string
   verified: boolean
@@ -13,101 +15,121 @@ interface GenidResult {
 function CallbackContent() {
   const searchParams = useSearchParams()
   const email = searchParams.get('email') ?? ''
-  const [status, setStatus] = useState<'loading' | 'success' | 'pending' | 'error'>('loading')
-  const [result, setResult] = useState<GenidResult | null>(null)
-  const [error, setError] = useState('')
+  const [status, setStatus] = useState<Status>('polling')
+  const [result, setResult] = useState<RegistrationResult | null>(null)
+  const [attempts, setAttempts] = useState(0)
+
+  const MAX_ATTEMPTS = 20      // 20 attempts
+  const POLL_INTERVAL = 3000   // every 3 seconds = 60 seconds max
 
   useEffect(() => {
     if (!email) {
       setStatus('error')
-      setError('No email found in callback URL.')
       return
     }
 
-    let attempts = 0
-    const poll = async () => {
+    let cancelled = false
+    let attemptCount = 0
+
+    async function poll() {
+      if (cancelled) return
+
+      attemptCount++
+      setAttempts(attemptCount)
+
+      if (attemptCount > MAX_ATTEMPTS) {
+        setStatus('timeout')
+        return
+      }
+
       try {
         const res = await fetch(`/api/genid/issue?email=${encodeURIComponent(email)}`)
-        const data = await res.json()
-
-        if (!res.ok) {
-          if (attempts < 6) {
-            attempts++
-            setTimeout(poll, 5000)
-          } else {
-            setStatus('error')
-            setError(data.error ?? 'Could not find your registration.')
+        if (res.ok) {
+          const data = await res.json()
+          if (data.verified) {
+            setResult(data)
+            setStatus('success')
+            return
           }
-          return
         }
-
-        setResult(data)
-        setStatus(data.verified ? 'success' : 'pending')
       } catch {
-        setStatus('error')
-        setError('Network error — please refresh the page.')
+        // network error, keep polling
       }
+
+      setTimeout(poll, POLL_INTERVAL)
     }
 
     poll()
+
+    return () => { cancelled = true }
   }, [email])
 
-  return (
-    <div className="max-w-lg mx-auto px-6 py-20 text-center">
-      {status === 'loading' && (
-        <>
-          <div className="w-12 h-12 border-2 border-violet-500 border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
-          <h2 className="text-xl font-semibold text-white mb-2">Confirming Your Verification</h2>
-          <p className="text-gray-400 text-sm">Checking with Stripe Identity... this takes a few seconds.</p>
-        </>
-      )}
-
-      {status === 'success' && result && (
-        <div className="bg-gray-900 border border-green-800 rounded-xl p-8">
-          <div className="w-14 h-14 bg-green-900/50 rounded-full flex items-center justify-center text-3xl mx-auto mb-4">✓</div>
-          <h2 className="text-2xl font-bold text-white mb-2">Identity Verified</h2>
-          <p className="text-gray-400 mb-6">Welcome, {result.user_name}. Your GENID is active.</p>
-          <div className="bg-gray-800 rounded-lg p-6 mb-6">
-            <div className="text-xs text-gray-500 mb-1 font-mono">YOUR GENID CODE</div>
-            <div className="text-4xl font-mono font-bold text-violet-400 tracking-widest">{result.genid_code}</div>
-            <div className="text-xs text-gray-500 mt-2">Permanently bound to your verified identity</div>
-          </div>
-          <div className="flex flex-col gap-3">
-            <a href="/embed" className="bg-violet-600 hover:bg-violet-500 text-white py-3 rounded-lg font-medium transition-colors block">
-              Stamp Your First Image →
-            </a>
-            <a href="/dashboard" className="border border-gray-700 hover:border-gray-500 text-gray-300 py-3 rounded-lg font-medium transition-colors block">
-              Go to Dashboard
-            </a>
-          </div>
+  if (status === 'success' && result) {
+    return (
+      <div className="max-w-lg mx-auto px-6 py-20 text-center">
+        <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-6">
+          <span className="text-white text-2xl">✓</span>
         </div>
-      )}
-
-      {status === 'pending' && result && (
-        <div className="bg-gray-900 border border-yellow-800 rounded-xl p-8">
-          <div className="w-14 h-14 bg-yellow-900/50 rounded-full flex items-center justify-center text-3xl mx-auto mb-4">⏳</div>
-          <h2 className="text-xl font-semibold text-white mb-2">Verification In Progress</h2>
-          <p className="text-gray-400 mb-4 text-sm">
-            Your GENID <span className="font-mono text-violet-400">{result.genid_code}</span> has been reserved.
-            Stripe is still processing your documents — this can take up to 5 minutes.
-          </p>
-          <p className="text-gray-500 text-xs mb-6">Check back soon or wait for a confirmation email.</p>
-          <a href="/" className="border border-gray-700 text-gray-400 py-2.5 px-6 rounded-lg text-sm hover:border-gray-500 inline-block">
-            Return Home
-          </a>
+        <h1 className="text-3xl font-bold text-white mb-2">Your GENID is Ready</h1>
+        <p className="text-gray-400 mb-8">Identity verified. Your creator ID is permanently issued.</p>
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 mb-8">
+          <p className="text-gray-400 text-sm mb-2">Your GENID Code</p>
+          <p className="text-4xl font-mono font-bold text-violet-400">{result.genid_code}</p>
+          <p className="text-gray-500 text-sm mt-3">Issued to {result.user_name} · Identity Verified</p>
         </div>
-      )}
+        <a href="/embed" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
+          Stamp Your First Image →
+        </a>
+      </div>
+    )
+  }
 
-      {status === 'error' && (
-        <div className="bg-gray-900 border border-red-800 rounded-xl p-8">
-          <div className="text-4xl mb-4">✗</div>
-          <h2 className="text-xl font-semibold text-white mb-2">Something Went Wrong</h2>
-          <p className="text-gray-400 text-sm mb-6">{error}</p>
-          <a href="/register" className="bg-violet-600 hover:bg-violet-500 text-white py-2.5 px-6 rounded-lg text-sm inline-block">
+  if (status === 'timeout') {
+    return (
+      <div className="max-w-lg mx-auto px-6 py-20 text-center">
+        <div className="w-16 h-16 bg-yellow-500 rounded-full flex items-center justify-center mx-auto mb-6">
+          <span className="text-white text-2xl">⏱</span>
+        </div>
+        <h2 className="text-2xl font-bold text-white mb-4">Verification In Progress</h2>
+        <p className="text-gray-400 mb-6">
+          Stripe is still processing your documents. This can take a few minutes.
+          Your GENID has been reserved — check back soon.
+        </p>
+        <a href={`/register/callback?email=${encodeURIComponent(email)}`}
+           className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors mr-3">
+          Check Again
+        </a>
+        <a href="/" className="border border-gray-600 text-gray-300 px-8 py-3 rounded-lg font-medium transition-colors">
+          Return Home
+        </a>
+      </div>
+    )
+  }
+
+  if (status === 'error') {
+    return (
+      <div className="max-w-lg mx-auto px-6 py-20 text-center">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-8">
+          <h2 className="text-xl font-bold text-white mb-4">Something Went Wrong</h2>
+          <p className="text-gray-400 mb-6">No registration found for this email.</p>
+          <a href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium transition-colors">
             Try Again
           </a>
         </div>
-      )}
+      </div>
+    )
+  }
+
+  // Polling state
+  return (
+    <div className="max-w-lg mx-auto px-6 py-20 text-center">
+      <div className="w-16 h-16 border-2 border-violet-500 border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
+      <h2 className="text-2xl font-bold text-white mb-4">Verification In Progress</h2>
+      <p className="text-gray-400 mb-2">
+        Your GENID <span className="text-violet-400 font-mono">is being issued</span>
+      </p>
+      <p className="text-gray-500 text-sm">Stripe is processing your documents — this can take up to 5 minutes.</p>
+      <p className="text-gray-600 text-xs mt-4">Check {attempts}/{MAX_ATTEMPTS}</p>
     </div>
   )
 }
@@ -116,7 +138,7 @@ export default function CallbackPage() {
   return (
     <Suspense fallback={
       <div className="max-w-lg mx-auto px-6 py-20 text-center">
-        <div className="w-12 h-12 border-2 border-violet-500 border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
+        <div className="w-16 h-16 border-2 border-violet-500 border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
         <p className="text-gray-400">Loading...</p>
       </div>
     }>

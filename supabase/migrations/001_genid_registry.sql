@@ -23,6 +23,9 @@ create table if not exists genid_content_log (
   platform text default 'GENID Protocol',
   blockchain_tx_hash text,
   blockchain_network text default 'polygon',
+  notary_signature    text,
+  notary_timestamp    bigint,
+  notary_hash         text,
   created_at timestamptz default now()
 );
 
