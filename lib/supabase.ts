@@ -217,3 +217,21 @@ export async function getCertificateForSession(sessionId: string): Promise<Certi
   if (error || !data) return null
   return data as CertificateRecord
 }
+
+export async function listSessionsForGenid(genidCode: string): Promise<SessionRecord[]> {
+  const { data, error } = await getAdmin()
+    .from('genid_sessions')
+    .select('*')
+    .eq('genid_code', genidCode)
+    .order('created_at', { ascending: false })
+
+  if (error || !data) return []
+  return data as SessionRecord[]
+}
+
+export async function getCertificatesForSessions(sessionIds: string[]): Promise<CertificateRecord[]> {
+  if (sessionIds.length === 0) return []
+  const { data, error } = await getAdmin().from('genid_certificates').select('*').in('session_id', sessionIds)
+  if (error || !data) return []
+  return data as CertificateRecord[]
+}
