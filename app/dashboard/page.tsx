@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 
 interface GenidRecord {
   genid_code: string
@@ -21,10 +22,20 @@ interface ContentEntry {
   created_at: string
 }
 
+interface SessionSummary {
+  id: string
+  contentType: string
+  status: 'active' | 'finalized' | 'abandoned'
+  createdAt: string
+  finalizedAt: string | null
+  certificate: { id: string; verifyUrl: string | null } | null
+}
+
 export default function DashboardPage() {
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(false)
   const [record, setRecord] = useState<GenidRecord | null>(null)
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [error, setError] = useState('')
 
   async function handleLookup(e: React.FormEvent) {
@@ -32,6 +43,7 @@ export default function DashboardPage() {
     setLoading(true)
     setError('')
     setRecord(null)
+    setSessions([])
 
     try {
       // First get the genid_code from email
@@ -44,8 +56,11 @@ export default function DashboardPage() {
         return
       }
 
-      // Then look up full record with content history
-      const codeRes = await fetch(`/api/genid/lookup?code=${encodeURIComponent(emailData.genid_code)}`)
+      // Then look up full record with content history, and sessions, in parallel
+      const [codeRes, sessionsRes] = await Promise.all([
+        fetch(`/api/genid/lookup?code=${encodeURIComponent(emailData.genid_code)}`),
+        fetch(`/api/session?email=${encodeURIComponent(email)}`),
+      ])
       const codeData = await codeRes.json()
 
       if (!codeRes.ok) {
@@ -55,6 +70,10 @@ export default function DashboardPage() {
       }
 
       setRecord(codeData)
+      if (sessionsRes.ok) {
+        const sessionsData = await sessionsRes.json()
+        setSessions(sessionsData.sessions ?? [])
+      }
     } catch {
       setError('Network error — please try again')
     }
@@ -136,6 +155,68 @@ export default function DashboardPage() {
             <a href="/verify" className="border border-gray-700 hover:border-gray-500 text-gray-300 py-3 rounded-lg font-medium transition-colors text-center">
               Verify an Image
             </a>
+          </div>
+
+          {/* Sessions */}
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-white">Your Sessions</h2>
+              <Link href="/session" className="text-sm text-violet-400 hover:text-violet-300">
+                + New Session
+              </Link>
+            </div>
+            {sessions.length === 0 ? (
+              <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-8 text-center text-gray-500">
+                No sessions yet. <Link href="/session" className="text-violet-400 hover:text-violet-300">Start your first session →</Link>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {sessions.map(session => (
+                  <div key={session.id} className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+                    <div className="flex items-start justify-between mb-2">
+                      <a href={`/session/${session.id}`} className="text-sm font-medium text-white hover:text-violet-300 transition-colors">
+                        Session {session.id.slice(0, 8)}…
+                      </a>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                          session.status === 'finalized'
+                            ? 'bg-green-900/50 text-green-400 border border-green-800'
+                            : session.status === 'active'
+                            ? 'bg-violet-900/50 text-violet-400 border border-violet-800'
+                            : 'bg-gray-800 text-gray-400 border border-gray-700'
+                        }`}
+                      >
+                        {session.status}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-500 mb-3">
+                      {session.contentType} · created {new Date(session.createdAt).toLocaleString()}
+                      {session.finalizedAt && <> · finalized {new Date(session.finalizedAt).toLocaleString()}</>}
+                    </div>
+                    <div className="flex items-center gap-4 text-xs">
+                      <a href={`/session/${session.id}`} className="text-violet-400 hover:text-violet-300">
+                        Open Session →
+                      </a>
+                      {session.certificate && (
+                        <a href={`/api/session/${session.id}/certificate`} className="text-violet-400 hover:text-violet-300">
+                          Download Certificate →
+                        </a>
+                      )}
+                      {session.certificate?.verifyUrl && (
+                        <a
+                          href={session.certificate.verifyUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-gray-500 hover:text-gray-300"
+                        >
+                          Verify ↗
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Content History */}

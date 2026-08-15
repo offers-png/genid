@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { lookupByEmail, createSession, createStep } from '@/lib/supabase'
+import {
+  lookupByEmail,
+  createSession,
+  createStep,
+  listSessionsForGenid,
+  getCertificatesForSessions,
+} from '@/lib/supabase'
 import { uploadToSessionBucket, stepStoragePath } from '@/lib/storage'
 import { hashBuffer } from '@/lib/steganography'
 import { buildStepContent, computeStepHash, signStepHash } from '@/lib/chain'
@@ -9,6 +15,40 @@ import { env } from '@/lib/env'
 // The single Phase 1 Model Adapter. Swapping providers later means adding a
 // new file under lib/adapters/ and changing this one line.
 const adapter = openAiImageAdapter
+
+// GET ?email= — lists an identity's sessions (most recent first) so a
+// session is reachable again from a dashboard, not just its one-time URL.
+export async function GET(req: NextRequest) {
+  const email = req.nextUrl.searchParams.get('email')
+  if (!email) {
+    return NextResponse.json({ error: 'email is required' }, { status: 400 })
+  }
+
+  const record = await lookupByEmail(email)
+  if (!record) {
+    return NextResponse.json({ error: 'No GENID found for this email' }, { status: 404 })
+  }
+
+  const sessions = await listSessionsForGenid(record.genid_code)
+  const certificates = await getCertificatesForSessions(sessions.map((s) => s.id))
+  const certificateBySession = new Map(certificates.map((c) => [c.session_id, c]))
+
+  return NextResponse.json({
+    sessions: sessions.map((session) => {
+      const certificate = certificateBySession.get(session.id)
+      return {
+        id: session.id,
+        contentType: session.content_type,
+        status: session.status,
+        createdAt: session.created_at,
+        finalizedAt: session.finalized_at,
+        certificate: certificate
+          ? { id: certificate.id, verifyUrl: certificate.public_verify_url }
+          : null,
+      }
+    }),
+  })
+}
 
 // POST { email, promptText }
 // Creates a session, generates step 1 inside GenID's own pipeline (not
