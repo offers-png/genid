@@ -206,3 +206,14 @@ export async function createCertificate(
   if (error || !data) throw new Error(`Failed to create certificate: ${error?.message}`)
   return data as CertificateRecord
 }
+
+export async function getCertificateForSession(sessionId: string): Promise<CertificateRecord | null> {
+  const { data, error } = await getAdmin()
+    .from('genid_certificates')
+    .select('*')
+    .eq('session_id', sessionId)
+    .single()
+
+  if (error || !data) return null
+  return data as CertificateRecord
+}
