@@ -8,7 +8,7 @@ Universal identity infrastructure for AI-generated content. GENID Protocol crypt
 
 1. **Register** — User completes government ID verification via Stripe Identity
 2. **Receive GENID** — A unique code (e.g. SA11212) is issued, tied to their verified identity
-3. **Create a session** (`/session`) — Generate an image inside GenID's own pipeline. The prompt, model, output, hash, and HMAC-SHA256 signature are captured automatically at the moment of creation — no upload step. Finalizing a session produces a signed Authorship Certificate (PDF).
+3. **Create a session** (`/session`) — Generate an image inside GenID's own pipeline. The prompt, model, output, hash, and HMAC-SHA256 signature are captured automatically at the moment of creation — no upload step. Regenerate with a new prompt or edit the current version (crop, color adjust) as many times as you like; nothing is ever deleted, and every version is chained to the one before it. Pick which version is final and hit Finalize to get a signed Authorship Certificate (PDF) covering the full version history.
 4. **Stamp** (`/embed`, legacy) — Upload an already-made AI image; GENID + notary signature embedded invisibly in pixels using LSB steganography. Kept for content generated outside GenID.
 5. **Verify** (`/verify`) — Anyone can upload a stamped image and see who created it, when, and whether the notary signature is valid
 

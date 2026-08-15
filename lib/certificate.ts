@@ -1,16 +1,28 @@
 import PDFDocument from 'pdfkit'
 
-// First-pass Authorship Certificate (Build Spec Section 3.2.7 — Phase 1
-// definition of done only requires prompt, output, timestamp, signature;
-// the full timeline/QR/C2PA-embedded version is Phase 7).
+export interface CertificateStep {
+  stepNumber: number
+  stepType: string
+  editType: string | null
+  promptText: string | null
+  userNote: string | null
+  outputHash: string | null
+  stepSignature: string | null
+  responseTimestamp: string | null
+  imageBuffer: Buffer | null
+  isFinal: boolean
+}
+
+// Authorship Certificate (Build Spec Section 3.2.7, extended per Section
+// 4.1.6 to show the full step timeline — every version, not just the final
+// output — once Phase 2 sessions can have more than one step).
 export function generateCertificatePdf(params: {
   genidCode: string
   creatorName: string
   sessionId: string
-  promptText: string
-  imageBuffer: Buffer
-  outputHash: string
-  stepSignature: string
+  totalSteps: number
+  totalDurationSeconds: number
+  steps: CertificateStep[]
   generatedAt: Date
 }): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -20,6 +32,13 @@ export function generateCertificatePdf(params: {
     doc.on('end', () => resolve(Buffer.concat(chunks)))
     doc.on('error', reject)
 
+    const pageBottom = () => doc.page.height - doc.page.margins.bottom
+    const ensureSpace = (needed: number) => {
+      if (doc.y + needed > pageBottom()) doc.addPage()
+    }
+
+    const finalStep = params.steps.find((s) => s.isFinal) ?? params.steps[params.steps.length - 1]
+
     doc.fontSize(20).text('GenID Authorship Certificate', { align: 'center' })
     doc.moveDown(1.5)
 
@@ -28,24 +47,65 @@ export function generateCertificatePdf(params: {
     doc.text(`Creator: ${params.creatorName}`)
     doc.text(`Session ID: ${params.sessionId}`)
     doc.text(`Generated: ${params.generatedAt.toISOString()}`)
-    doc.moveDown()
+    doc.text(`Total Steps: ${params.totalSteps}`)
+    doc.text(`Total Session Duration: ${params.totalDurationSeconds}s`)
+    doc.moveDown(1.2)
 
-    doc.fontSize(13).text('Prompt', { underline: true })
-    doc.fontSize(11).text(params.promptText)
-    doc.moveDown()
+    if (finalStep) {
+      doc.fontSize(15).text('Final Selection', { underline: true })
+      doc.moveDown(0.4)
+      doc.fontSize(11).text(`Step ${finalStep.stepNumber} — ${finalStep.stepType}${finalStep.editType ? ` (${finalStep.editType})` : ''}`)
+      if (finalStep.promptText) doc.fontSize(11).text(`Prompt: ${finalStep.promptText}`)
+      if (finalStep.userNote) doc.fontSize(11).text(`Note: ${finalStep.userNote}`)
+      doc.moveDown(0.6)
 
-    doc.image(params.imageBuffer, { fit: [450, 450], align: 'center' })
-    doc.moveDown()
+      if (finalStep.imageBuffer) {
+        ensureSpace(320)
+        doc.image(finalStep.imageBuffer, { fit: [420, 300], align: 'center' })
+        doc.moveDown(0.6)
+      }
 
-    doc.fontSize(13).text('Signature', { underline: true })
-    doc.fontSize(9).font('Courier')
-    doc.text(`Output hash (SHA-256): ${params.outputHash}`)
-    doc.text(`Step signature (HMAC-SHA256): ${params.stepSignature}`)
-    doc.moveDown()
+      doc.fontSize(9).font('Courier')
+      doc.text(`Output hash (SHA-256): ${finalStep.outputHash ?? ''}`)
+      doc.text(`Step signature (HMAC-SHA256): ${finalStep.stepSignature ?? ''}`)
+      doc.font('Helvetica')
+      doc.moveDown(1.2)
+    }
 
-    doc.font('Helvetica').fontSize(8).fillColor('gray').text(
-      'This certificate documents the creative process behind this content — what was created, ' +
-        'when, and by whom — and is tamper-evident via the signature above. It does not grant ' +
+    doc.fontSize(15).text('Version History', { underline: true })
+    doc.moveDown(0.6)
+
+    for (const step of params.steps) {
+      ensureSpace(200)
+
+      const label = `Step ${step.stepNumber} — ${step.stepType}${step.editType ? ` (${step.editType})` : ''}${step.isFinal ? '  ★ FINAL' : ''}`
+      doc.fontSize(12).fillColor(step.isFinal ? '#5b21b6' : '#000000').text(label)
+      doc.fillColor('#000000')
+
+      if (step.responseTimestamp) {
+        doc.fontSize(9).fillColor('gray').text(new Date(step.responseTimestamp).toISOString())
+        doc.fillColor('#000000')
+      }
+      if (step.promptText) doc.fontSize(10).text(`Prompt: ${step.promptText}`)
+      if (step.userNote) doc.fontSize(10).text(`Note: ${step.userNote}`)
+
+      if (step.imageBuffer) {
+        ensureSpace(160)
+        doc.image(step.imageBuffer, { fit: [140, 140] })
+        doc.moveDown(0.3)
+      }
+
+      doc.fontSize(8).font('Courier').fillColor('gray')
+      doc.text(`hash: ${step.outputHash ?? ''}`)
+      doc.font('Helvetica').fillColor('#000000')
+      doc.moveDown(0.8)
+    }
+
+    ensureSpace(60)
+    doc.moveDown(0.6)
+    doc.fontSize(8).fillColor('gray').text(
+      'This certificate documents the creative process behind this content — every version, when it ' +
+        'was made, and by whom — and is tamper-evident via the signatures above. It does not grant ' +
         'copyright; copyrightability is determined by courts and the U.S. Copyright Office.',
       { align: 'left' }
     )

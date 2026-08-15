@@ -8,16 +8,19 @@ import {
   lookupGenid,
 } from '@/lib/supabase'
 import { downloadFromSessionBucket, uploadToSessionBucket } from '@/lib/storage'
-import { generateCertificatePdf } from '@/lib/certificate'
+import { generateCertificatePdf, type CertificateStep } from '@/lib/certificate'
 
-// POST — Phase 1's "finalize" button (Build Spec Section 3.2.7). Marks the
-// session's step as final and generates a first-pass Authorship Certificate:
-// prompt, output image, timestamp, signature. session_root_hash / Polygon
-// anchoring / public_verify_url are Phase 3+ — left null here rather than
-// half-implemented.
-export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+// POST { stepId? } — the "finalize" button (Build Spec Sections 3.2.7 and
+// 4.1.5 "Mark Final"). Marks the caller-chosen step final (defaulting to the
+// latest step when omitted, which preserves Phase 1's single-step behavior)
+// and generates the Authorship Certificate covering the full step timeline.
+// session_root_hash / Polygon anchoring / public_verify_url are Phase 3+ —
+// left null here rather than half-implemented.
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id: sessionId } = await params
+    const body = await req.json().catch(() => ({}))
+    const requestedStepId = (body as { stepId?: string })?.stepId
 
     const session = await getSession(sessionId)
     if (!session) {
@@ -28,11 +31,10 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     }
 
     const steps = await getSessionSteps(sessionId)
-    // Phase 1 has exactly one step per session — Phase 2 adds a caller-chosen
-    // final selection among several.
-    const finalStep = steps[steps.length - 1]
+    const finalStep = requestedStepId ? steps.find((s) => s.id === requestedStepId) : steps[steps.length - 1]
     if (!finalStep) {
-      return NextResponse.json({ error: 'Session has no steps to finalize' }, { status: 400 })
+      const error = requestedStepId ? 'stepId does not belong to this session' : 'Session has no steps to finalize'
+      return NextResponse.json({ error }, { status: 400 })
     }
 
     const record = await lookupGenid(session.genid_code)
@@ -43,27 +45,39 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     await markStepFinal(finalStep.id)
     await finalizeSession(sessionId, finalStep.id)
 
-    const imageBuffer = await downloadFromSessionBucket(finalStep.output_storage_path!)
     const generatedAt = new Date()
+    const totalDurationSeconds = Math.max(
+      0,
+      Math.round((generatedAt.getTime() - new Date(session.created_at).getTime()) / 1000)
+    )
+
+    const certificateSteps: CertificateStep[] = await Promise.all(
+      steps.map(async (step): Promise<CertificateStep> => ({
+        stepNumber: step.step_number,
+        stepType: step.step_type,
+        editType: step.edit_type,
+        promptText: step.prompt_text,
+        userNote: step.user_note,
+        outputHash: step.output_hash,
+        stepSignature: step.step_signature,
+        responseTimestamp: step.response_timestamp,
+        imageBuffer: step.output_storage_path ? await downloadFromSessionBucket(step.output_storage_path) : null,
+        isFinal: step.id === finalStep.id,
+      }))
+    )
 
     const pdfBuffer = await generateCertificatePdf({
       genidCode: session.genid_code,
       creatorName: record.user_name,
       sessionId: session.id,
-      promptText: finalStep.prompt_text ?? '',
-      imageBuffer,
-      outputHash: finalStep.output_hash ?? '',
-      stepSignature: finalStep.step_signature ?? '',
+      totalSteps: steps.length,
+      totalDurationSeconds,
+      steps: certificateSteps,
       generatedAt,
     })
 
     const pdfPath = `${sessionId}/certificate.pdf`
     await uploadToSessionBucket(pdfPath, pdfBuffer, 'application/pdf')
-
-    const totalDurationSeconds = Math.max(
-      0,
-      Math.round((generatedAt.getTime() - new Date(session.created_at).getTime()) / 1000)
-    )
 
     const certificate = await createCertificate({
       session_id: sessionId,
