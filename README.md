@@ -8,15 +8,19 @@ Universal identity infrastructure for AI-generated content. GENID Protocol crypt
 
 1. **Register** — User completes government ID verification via Stripe Identity
 2. **Receive GENID** — A unique code (e.g. SA11212) is issued, tied to their verified identity
-3. **Stamp** — Upload any AI-generated image; GENID + notary signature embedded invisibly in pixels using LSB steganography
-4. **Verify** — Anyone can upload an image and see who created it, when, and whether the notary signature is valid
+3. **Create a session** (`/session`) — Generate an image inside GenID's own pipeline. The prompt, model, output, hash, and HMAC-SHA256 signature are captured automatically at the moment of creation — no upload step. Regenerate with a new prompt or edit the current version (crop, color adjust) as many times as you like; nothing is ever deleted, and every version is chained to the one before it. Pick which version is final and hit Finalize to get a signed Authorship Certificate (PDF) covering the full version history.
+4. **Stamp** (`/embed`, legacy) — Upload an already-made AI image; GENID + notary signature embedded invisibly in pixels using LSB steganography. Kept for content generated outside GenID.
+5. **Verify** (`/verify`) — Anyone can upload a stamped image and see who created it, when, and whether the notary signature is valid
 
 ## Tech Stack
 
 - **Framework:** Next.js 16 (App Router)
 - **Database:** Supabase (PostgreSQL)
+- **Storage:** Supabase Storage (session step outputs, certificate PDFs)
 - **Identity Verification:** Stripe Identity
-- **Steganography:** LSB pixel embedding via sharp
+- **Generation:** OpenAI `gpt-image-1` (Phase 1 Model Adapter — `lib/adapters/`)
+- **Certificates:** PDF via pdfkit (`lib/certificate.ts`)
+- **Steganography:** LSB pixel embedding via sharp (legacy post-hoc stamping)
 - **Blockchain:** Polygon via Alchemy (optional)
 - **Hosting:** Render (Web Service)
 
@@ -40,12 +44,17 @@ Fill in all values in `.env.local`. See `.env.example` for descriptions.
 
 ### 3. Set up Supabase
 
-Run the migration in your Supabase SQL editor:
+Run the migrations, in order, in your Supabase SQL editor:
 
 ```bash
-# Copy contents of supabase/migrations/001_genid_registry.sql
-# Paste and run in Supabase Dashboard → SQL Editor
+# supabase/migrations/001_genid_registry.sql
+# supabase/migrations/002_verification_status.sql
+# supabase/migrations/003_sessions_steps_certificates.sql
+# Paste each into Supabase Dashboard → SQL Editor and run in order.
 ```
+
+Migration 003 also registers the `genid-sessions` Storage bucket (private —
+session step outputs and certificate PDFs, served only through API routes).
 
 ### 4. Configure Stripe Identity
 
