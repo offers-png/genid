@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { lookupByEmail, createSession, createStep } from '@/lib/supabase'
 import { uploadToSessionBucket, stepStoragePath } from '@/lib/storage'
 import { hashBuffer } from '@/lib/steganography'
-import { computeStepHash, signStepHash } from '@/lib/chain'
+import { buildStepContent, computeStepHash, signStepHash } from '@/lib/chain'
 import { openAiImageAdapter } from '@/lib/adapters/openai-image'
 import { env } from '@/lib/env'
 
@@ -45,14 +45,15 @@ export async function POST(req: NextRequest) {
     // Step 1 has no prior step to chain from (prior_step_signature stays
     // null). The formula still follows Build Spec Section 5.1 so Phase 2/3
     // don't have to rewrite how step 1 was signed.
-    const stepContent = [
-      session.id,
-      1,
+    const stepContent = buildStepContent({
+      sessionId: session.id,
+      stepNumber: 1,
       outputHash,
       promptText,
-      generation.modelUsed,
-      generation.responseTimestamp.toISOString(),
-    ].join(':')
+      editType: null,
+      modelUsed: generation.modelUsed,
+      responseTimestamp: generation.responseTimestamp,
+    })
     const stepHash = computeStepHash(stepContent, null)
     const stepSignature = signStepHash(stepHash, env.genidSigningSecret)
 

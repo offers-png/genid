@@ -24,6 +24,7 @@ export function generateCertificatePdf(params: {
   totalDurationSeconds: number
   steps: CertificateStep[]
   generatedAt: Date
+  verifyUrl?: string
 }): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50 })
@@ -98,6 +99,15 @@ export function generateCertificatePdf(params: {
       doc.fontSize(8).font('Courier').fillColor('gray')
       doc.text(`hash: ${step.outputHash ?? ''}`)
       doc.font('Helvetica').fillColor('#000000')
+      doc.moveDown(0.8)
+    }
+
+    if (params.verifyUrl) {
+      ensureSpace(40)
+      doc.fontSize(15).text('Verify This Certificate', { underline: true })
+      doc.moveDown(0.4)
+      doc.fontSize(10).fillColor('#5b21b6').text(params.verifyUrl)
+      doc.fillColor('#000000')
       doc.moveDown(0.8)
     }
 

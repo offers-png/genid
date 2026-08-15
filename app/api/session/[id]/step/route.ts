@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSession, getSessionSteps, createStep } from '@/lib/supabase'
 import { uploadToSessionBucket, downloadFromSessionBucket, stepStoragePath } from '@/lib/storage'
 import { hashBuffer } from '@/lib/steganography'
-import { computeStepHash, signStepHash } from '@/lib/chain'
+import { buildStepContent, computeStepHash, signStepHash } from '@/lib/chain'
 import { openAiImageAdapter } from '@/lib/adapters/openai-image'
 import { applyCrop, applyColorAdjust } from '@/lib/edits'
 import { env } from '@/lib/env'
@@ -87,14 +87,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const storagePath = stepStoragePath(sessionId, nextStepNumber, ext)
     await uploadToSessionBucket(storagePath, outputBuffer, mimeType)
 
-    const stepContent = [
+    const stepContent = buildStepContent({
       sessionId,
-      nextStepNumber,
+      stepNumber: nextStepNumber,
       outputHash,
-      promptText ?? editType ?? '',
-      modelUsed ?? '',
-      responseTimestamp.toISOString(),
-    ].join(':')
+      promptText,
+      editType,
+      modelUsed,
+      responseTimestamp,
+    })
     const stepHash = computeStepHash(stepContent, priorStep.step_signature)
     const stepSignature = signStepHash(stepHash, env.genidSigningSecret)
 

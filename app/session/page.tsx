@@ -22,6 +22,7 @@ interface StepView {
 interface FinalizeResult {
   certificateId: string
   pdfBase64: string
+  verifyUrl: string
 }
 
 export default function SessionPage() {
@@ -447,6 +448,14 @@ export default function SessionPage() {
               className="bg-violet-600 hover:bg-violet-500 text-white py-3 rounded-lg font-medium transition-colors text-center block"
             >
               Download Certificate (PDF)
+            </a>
+            <a
+              href={certificate.verifyUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="border border-gray-700 hover:border-violet-500 text-gray-300 py-2.5 rounded-lg text-sm transition-colors text-center block"
+            >
+              Verify This Session ↗
             </a>
             <button
               onClick={reset}

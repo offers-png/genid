@@ -9,13 +9,16 @@ import {
 } from '@/lib/supabase'
 import { downloadFromSessionBucket, uploadToSessionBucket } from '@/lib/storage'
 import { generateCertificatePdf, type CertificateStep } from '@/lib/certificate'
+import { computeSessionRootHash } from '@/lib/chain'
+import { stampOnBlockchain } from '@/lib/blockchain'
+import { env } from '@/lib/env'
 
 // POST { stepId? } — the "finalize" button (Build Spec Sections 3.2.7 and
 // 4.1.5 "Mark Final"). Marks the caller-chosen step final (defaulting to the
-// latest step when omitted, which preserves Phase 1's single-step behavior)
-// and generates the Authorship Certificate covering the full step timeline.
-// session_root_hash / Polygon anchoring / public_verify_url are Phase 3+ —
-// left null here rather than half-implemented.
+// latest step when omitted, which preserves Phase 1's single-step behavior),
+// computes the session_root_hash from every step's signature in order,
+// anchors only that root hash to Polygon (Section 5.2.3 — not every step,
+// for cost control), and generates the Authorship Certificate.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id: sessionId } = await params
@@ -42,8 +45,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Registry record not found for this session' }, { status: 500 })
     }
 
+    // Root hash covers every step in the chain, in order — not just the
+    // final selection — since the whole point is proving the sequence
+    // wasn't reordered or pruned, not just that the chosen output is intact.
+    const sessionRootHash = computeSessionRootHash(steps.map((s) => s.step_signature ?? ''))
+
+    let polygonAnchorTx: string | null = null
+    try {
+      const stamp = await stampOnBlockchain({
+        genidCode: session.genid_code,
+        contentHash: sessionRootHash,
+        fileName: `session-${sessionId}`,
+      })
+      polygonAnchorTx = stamp.txHash
+    } catch (blockchainErr) {
+      console.error('Polygon anchor failed (non-fatal):', blockchainErr)
+    }
+
     await markStepFinal(finalStep.id)
-    await finalizeSession(sessionId, finalStep.id)
+    await finalizeSession(sessionId, finalStep.id, sessionRootHash, polygonAnchorTx)
 
     const generatedAt = new Date()
     const totalDurationSeconds = Math.max(
@@ -66,6 +86,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }))
     )
 
+    const publicVerifyUrl = `${env.appUrl}/session/verify/${sessionId}`
+
     const pdfBuffer = await generateCertificatePdf({
       genidCode: session.genid_code,
       creatorName: record.user_name,
@@ -74,6 +96,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       totalDurationSeconds,
       steps: certificateSteps,
       generatedAt,
+      verifyUrl: publicVerifyUrl,
     })
 
     const pdfPath = `${sessionId}/certificate.pdf`
@@ -84,7 +107,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       pdf_export_path: pdfPath,
       json_export_path: null,
       c2pa_manifest_embedded: false,
-      public_verify_url: null,
+      public_verify_url: publicVerifyUrl,
       total_steps: steps.length,
       total_duration_seconds: totalDurationSeconds,
       content_type: session.content_type,
@@ -95,6 +118,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({
       certificateId: certificate.id,
       pdfBase64: pdfBuffer.toString('base64'),
+      sessionRootHash,
+      polygonAnchorTx,
+      verifyUrl: publicVerifyUrl,
     })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Finalize failed'

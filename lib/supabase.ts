@@ -157,10 +157,21 @@ export async function getSession(sessionId: string): Promise<SessionRecord | nul
   return data as SessionRecord
 }
 
-export async function finalizeSession(sessionId: string, finalStepId: string): Promise<void> {
+export async function finalizeSession(
+  sessionId: string,
+  finalStepId: string,
+  sessionRootHash: string,
+  polygonAnchorTx: string | null
+): Promise<void> {
   const { error } = await getAdmin()
     .from('genid_sessions')
-    .update({ status: 'finalized', final_step_id: finalStepId, finalized_at: new Date().toISOString() })
+    .update({
+      status: 'finalized',
+      final_step_id: finalStepId,
+      finalized_at: new Date().toISOString(),
+      session_root_hash: sessionRootHash,
+      polygon_anchor_tx: polygonAnchorTx,
+    })
     .eq('id', sessionId)
 
   if (error) throw new Error(`Failed to finalize session: ${error.message}`)
