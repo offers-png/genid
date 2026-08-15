@@ -53,7 +53,15 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
       initialSteps={stepViews}
       initialFinalStepId={session.final_step_id}
       initialStatus={isFinalized ? 'finalized' : 'active'}
-      initialCertificate={certificate ? { certificateId: certificate.id, verifyUrl: certificate.public_verify_url } : null}
+      initialCertificate={
+        certificate
+          ? {
+              certificateId: certificate.id,
+              verifyUrl: certificate.public_verify_url,
+              c2paManifestEmbedded: certificate.c2pa_manifest_embedded,
+            }
+          : null
+      }
     />
   )
 }

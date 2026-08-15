@@ -23,6 +23,7 @@ export interface StepView {
 export interface CertificateView {
   certificateId: string
   verifyUrl: string | null
+  c2paManifestEmbedded: boolean
 }
 
 // The iterate/regenerate/edit/finalize workspace for one session. Seeded
@@ -142,7 +143,11 @@ export default function SessionWorkspace({
         return
       }
 
-      setCertificate({ certificateId: data.certificateId, verifyUrl: data.verifyUrl })
+      setCertificate({
+        certificateId: data.certificateId,
+        verifyUrl: data.verifyUrl,
+        c2paManifestEmbedded: data.c2paManifestEmbedded ?? false,
+      })
       setStatus('finalized')
     } catch {
       setError('Network error — please try again')
@@ -364,6 +369,14 @@ export default function SessionWorkspace({
             >
               Download Certificate (PDF)
             </a>
+            {certificate.c2paManifestEmbedded && (
+              <a
+                href={`/api/session/${sessionId}/c2pa-export`}
+                className="border border-gray-700 hover:border-violet-500 text-gray-300 py-2.5 rounded-lg text-sm transition-colors text-center block"
+              >
+                Download C2PA Export (PNG)
+              </a>
+            )}
             {certificate.verifyUrl && (
               <a
                 href={certificate.verifyUrl}

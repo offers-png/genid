@@ -11,16 +11,25 @@ export function stepStoragePath(sessionId: string, stepNumber: number, ext: stri
   return `${sessionId}/step_${stepNumber}.${ext}`
 }
 
+export function c2paExportStoragePath(sessionId: string): string {
+  return `${sessionId}/c2pa-export.png`
+}
+
 // Generic upload/download against the session bucket — used for step output
-// files (via stepStoragePath) and for certificate PDFs alike.
+// files (via stepStoragePath) and for certificate/C2PA exports alike.
+// upsert defaults to false for step outputs, whose whole point is
+// immutability once written; the finalize route passes upsert: true for
+// the certificate PDF and C2PA export, which are safe (and need) to
+// regenerate on a retry.
 export async function uploadToSessionBucket(
   path: string,
   buffer: Buffer,
-  contentType: string
+  contentType: string,
+  opts?: { upsert?: boolean }
 ): Promise<void> {
   const { error } = await getAdmin()
     .storage.from(BUCKET)
-    .upload(path, buffer, { contentType, upsert: false })
+    .upload(path, buffer, { contentType, upsert: opts?.upsert ?? false })
 
   if (error) throw new Error(`Storage upload failed: ${error.message}`)
 }

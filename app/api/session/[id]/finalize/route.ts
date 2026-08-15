@@ -6,13 +6,15 @@ import {
   markStepFinal,
   finalizeSession,
   createCertificate,
+  setSessionC2paManifestId,
   lookupGenid,
   type StepRecord,
 } from '@/lib/supabase'
-import { downloadFromSessionBucket, uploadToSessionBucket } from '@/lib/storage'
+import { downloadFromSessionBucket, uploadToSessionBucket, c2paExportStoragePath } from '@/lib/storage'
 import { generateCertificatePdf, type CertificateStep } from '@/lib/certificate'
 import { computeSessionRootHash } from '@/lib/chain'
 import { stampOnBlockchain } from '@/lib/blockchain'
+import { embedC2paManifest } from '@/lib/c2pa'
 import { env } from '@/lib/env'
 
 // POST { stepId? } — the "finalize" button (Build Spec Sections 3.2.7 and
@@ -134,6 +136,34 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const publicVerifyUrl = `${env.appUrl}/session/verify/${sessionId}`
 
+    // C2PA manifest embedding (Build Spec Section 8) — best-effort and
+    // deliberately non-fatal, done before the PDF so the certificate can
+    // accurately say whether one is attached. It signs with a real, valid,
+    // non-self-signed certificate chain, but one issued outside the
+    // official C2PA Conformance Program, so it reads as untrusted in any
+    // third-party verifier (see lib/c2pa.ts for the full explanation,
+    // verified against a real embed/read-back round trip). A C2PA failure
+    // here never touches genid_sessions/genid_steps, so it can't re-create
+    // the stuck-session bug the ordering in this route already prevents.
+    let c2paManifestId: string | null = null
+    const finalCertStep = certificateSteps.find((s) => s.isFinal)
+    if (finalCertStep?.imageBuffer) {
+      try {
+        const c2paResult = await embedC2paManifest({
+          sessionId,
+          genidCode: session.genid_code,
+          steps,
+          finalImageBuffer: finalCertStep.imageBuffer,
+        })
+        await uploadToSessionBucket(c2paExportStoragePath(sessionId), c2paResult.signedImageBuffer, 'image/png', {
+          upsert: true,
+        })
+        c2paManifestId = c2paResult.manifestLabel
+      } catch (c2paErr) {
+        console.error('C2PA manifest embedding failed (non-fatal):', c2paErr)
+      }
+    }
+
     // Everything above this line is read-only or idempotent to repeat. The
     // PDF generation below is the step that actually failed in production —
     // nothing has been written to genid_sessions/genid_steps yet, so a
@@ -147,22 +177,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       steps: certificateSteps,
       generatedAt,
       verifyUrl: publicVerifyUrl,
+      c2paManifestEmbedded: c2paManifestId !== null,
     })
 
     const pdfPath = `${sessionId}/certificate.pdf`
-    await uploadToSessionBucket(pdfPath, pdfBuffer, 'application/pdf')
+    await uploadToSessionBucket(pdfPath, pdfBuffer, 'application/pdf', { upsert: true })
 
     // Only now commit the finalized state.
     await markStepFinal(finalStep.id)
     if (!alreadyFinalized) {
       await finalizeSession(sessionId, finalStep.id, sessionRootHash, polygonAnchorTx)
     }
+    if (c2paManifestId) {
+      await setSessionC2paManifestId(sessionId, c2paManifestId)
+    }
 
     const certificate = await createCertificate({
       session_id: sessionId,
       pdf_export_path: pdfPath,
       json_export_path: null,
-      c2pa_manifest_embedded: false,
+      c2pa_manifest_embedded: c2paManifestId !== null,
       public_verify_url: publicVerifyUrl,
       total_steps: steps.length,
       total_duration_seconds: totalDurationSeconds,
@@ -177,6 +211,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       sessionRootHash,
       polygonAnchorTx,
       verifyUrl: publicVerifyUrl,
+      c2paManifestEmbedded: c2paManifestId !== null,
     })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Finalize failed'

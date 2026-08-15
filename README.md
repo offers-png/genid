@@ -8,9 +8,14 @@ Universal identity infrastructure for AI-generated content. GENID Protocol crypt
 
 1. **Register** — User completes government ID verification via Stripe Identity
 2. **Receive GENID** — A unique code (e.g. SA11212) is issued, tied to their verified identity
-3. **Create a session** (`/session`) — Generate an image inside GenID's own pipeline. The prompt, model, output, hash, and HMAC-SHA256 signature are captured automatically at the moment of creation — no upload step. Regenerate with a new prompt or edit the current version (crop, color adjust) as many times as you like; nothing is ever deleted, and every version is chained to the one before it. Pick which version is final and hit Finalize to get a signed Authorship Certificate (PDF) covering the full version history.
-4. **Stamp** (`/embed`, legacy) — Upload an already-made AI image; GENID + notary signature embedded invisibly in pixels using LSB steganography. Kept for content generated outside GenID.
-5. **Verify** (`/verify`) — Anyone can upload a stamped image and see who created it, when, and whether the notary signature is valid
+3. **Create a session** (`/session`) — Generate an image inside GenID's own pipeline. The prompt, model, output, hash, and HMAC-SHA256 signature are captured automatically at the moment of creation — no upload step. Regenerate with a new prompt or edit the current version (crop, color adjust) as many times as you like; nothing is ever deleted, and every version is chained to the one before it. Pick which version is final and hit Finalize to get a signed Authorship Certificate (PDF) covering the full version history, a session root hash anchored to Polygon, and a C2PA/CAWG manifest embedded in the exported image.
+4. **Find it again** (`/dashboard`) — Every session shows up here by registered email: status, dates, a link back in, and a certificate download once one exists.
+5. **Stamp** (`/embed`, legacy) — Upload an already-made AI image; GENID + notary signature embedded invisibly in pixels using LSB steganography. Kept for content generated outside GenID.
+6. **Verify** (`/verify` for stamped images, `/session/verify/[id]` for sessions) — Anyone can check whether a signature is valid, a hash chain is intact, or a C2PA manifest is present — no GenID account required.
+
+### C2PA / CAWG trust status
+
+Exported images carry a real, structurally spec-valid C2PA manifest with a CAWG identity assertion (confirmed via embed → read-back round trip). It is signed with a genuine, non-self-signed certificate chain that is **not** issued through the official C2PA Conformance Program, so third-party verifiers (Adobe's Content Credentials verifier, etc.) will correctly report the signing credential as **untrusted** — that registration is an external business/legal process (security evaluation through an approved CA — SSL.com, DigiCert, or Trufo as of early 2026), not something this codebase can complete on its own. `/session/verify/[id]` shows the real validation status rather than papering over it. See `lib/c2pa.ts` for the full explanation.
 
 ## Tech Stack
 
@@ -20,6 +25,7 @@ Universal identity infrastructure for AI-generated content. GENID Protocol crypt
 - **Identity Verification:** Stripe Identity
 - **Generation:** OpenAI `gpt-image-1` (Phase 1 Model Adapter — `lib/adapters/`)
 - **Certificates:** PDF via pdfkit (`lib/certificate.ts`)
+- **C2PA/CAWG:** `@contentauth/c2pa-node` (`lib/c2pa.ts`) — requires **Node.js >=22**
 - **Steganography:** LSB pixel embedding via sharp (legacy post-hoc stamping)
 - **Blockchain:** Polygon via Alchemy (optional)
 - **Hosting:** Render (Web Service)
@@ -77,8 +83,9 @@ App runs at `http://localhost:3000`
 2. Connect the GitHub repo
 3. Set build command: `npm install && npm run build`
 4. Set start command: `npm run start`
-5. Add all environment variables from `.env.example`
-6. Deploy
+5. Add all environment variables from `.env.example`, including the multi-line `C2PA_SIGNING_CERT_CHAIN_PEM` / `C2PA_SIGNING_KEY_PEM`
+6. Confirm the service is on **Node.js 22 or newer** (`package.json` sets `engines.node`, but double-check Render's Node version setting matches — `@contentauth/c2pa-node` hard-requires it)
+7. Deploy
 
 ## Security
 

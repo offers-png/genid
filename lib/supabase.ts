@@ -199,6 +199,11 @@ export async function markStepFinal(stepId: string): Promise<void> {
   if (error) throw new Error(`Failed to mark step final: ${error.message}`)
 }
 
+export async function setSessionC2paManifestId(sessionId: string, manifestId: string): Promise<void> {
+  const { error } = await getAdmin().from('genid_sessions').update({ c2pa_manifest_id: manifestId }).eq('id', sessionId)
+  if (error) throw new Error(`Failed to set C2PA manifest id: ${error.message}`)
+}
+
 export async function createCertificate(
   entry: Omit<CertificateRecord, 'id' | 'generated_at'>
 ): Promise<CertificateRecord> {
