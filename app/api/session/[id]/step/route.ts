@@ -84,6 +84,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const responseTimestamp = new Date()
     const outputHash = hashBuffer(outputBuffer)
+
+    // An edit whose output is byte-identical to what it started from is a
+    // no-op — most commonly the edit panel submitted at its default
+    // (identity) parameters. Recording it anyway would put a real action
+    // label (c2pa.cropped / c2pa.color_adjustments) on the signed record
+    // and in the C2PA manifest for a change that didn't happen, which is
+    // actively misleading, not just a wasted step. Reject before any
+    // upload or DB write — regenerate isn't checked here since two
+    // independent AI generations producing identical bytes isn't a
+    // realistic no-op case.
+    if (stepType === 'edit' && outputHash === priorStep.output_hash) {
+      return NextResponse.json(
+        { error: 'This edit produced no change from the previous version. Adjust the crop or color values before applying.' },
+        { status: 400 }
+      )
+    }
+
     const storagePath = stepStoragePath(sessionId, nextStepNumber, ext)
     await uploadToSessionBucket(storagePath, outputBuffer, mimeType)
 

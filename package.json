@@ -2,6 +2,9 @@
   "name": "genid-protocol",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,6 +12,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@contentauth/c2pa-node": "^0.8.3",
     "@supabase/supabase-js": "^2.105.1",
     "ethers": "^6.16.0",
     "next": "16.2.4",
@@ -20,7 +24,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^22.20.1",
     "@types/pdfkit": "^0.17.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",

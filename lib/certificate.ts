@@ -25,6 +25,7 @@ export function generateCertificatePdf(params: {
   steps: CertificateStep[]
   generatedAt: Date
   verifyUrl?: string
+  c2paManifestEmbedded?: boolean
 }): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50 })
@@ -107,6 +108,22 @@ export function generateCertificatePdf(params: {
       doc.fontSize(15).text('Verify This Certificate', { underline: true })
       doc.moveDown(0.4)
       doc.fontSize(10).fillColor('#5b21b6').text(params.verifyUrl)
+      doc.fillColor('#000000')
+      doc.moveDown(0.8)
+    }
+
+    if (params.c2paManifestEmbedded) {
+      ensureSpace(60)
+      doc.fontSize(15).text('C2PA / CAWG Manifest', { underline: true })
+      doc.moveDown(0.4)
+      doc.fontSize(9).fillColor('gray').text(
+        'A standards-based C2PA manifest with a CAWG identity assertion is embedded in the exported image, ' +
+          'readable by any C2PA-compatible tool. It is signed with a real certificate that is not yet a member ' +
+          'of the official C2PA Trust List, so third-party verifiers will correctly report the signing ' +
+          'credential as untrusted until that registration is complete. See the verification link above for ' +
+          'the current status.',
+        { align: 'left' }
+      )
       doc.fillColor('#000000')
       doc.moveDown(0.8)
     }
