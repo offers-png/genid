@@ -68,6 +68,11 @@ export default function SessionWorkspace({
 
   const viewingStep = steps.find(s => s.id === viewingStepId) ?? steps[steps.length - 1] ?? null
 
+  const isNoOpEdit =
+    editType === 'color_adjust'
+      ? colorAdjust.brightness === 1 && colorAdjust.saturation === 1
+      : crop.leftPct === 0 && crop.topPct === 0 && crop.widthPct === 1 && crop.heightPct === 1
+
   async function submitStep(body: Record<string, unknown>) {
     setStatus('busy')
     setError('')
@@ -104,6 +109,11 @@ export default function SessionWorkspace({
       setPanel('none')
       setNote('')
       setRegeneratePrompt('')
+      // Reset edit params back to identity defaults so reopening the Edit
+      // panel next time doesn't silently carry over this step's values —
+      // that's exactly how a later no-op submission happens unnoticed.
+      setCrop({ leftPct: 0, topPct: 0, widthPct: 1, heightPct: 1 })
+      setColorAdjust({ brightness: 1, saturation: 1 })
       setStatus('active')
     } catch {
       setError('Network error — please try again')
@@ -119,6 +129,7 @@ export default function SessionWorkspace({
 
   function handleEdit(e: React.FormEvent) {
     e.preventDefault()
+    if (isNoOpEdit) return
     const params = editType === 'crop' ? crop : colorAdjust
     submitStep({ action: 'edit', editType, params, userNote: note || undefined })
   }
@@ -324,9 +335,15 @@ export default function SessionWorkspace({
 
               <NoteField note={note} setNote={setNote} />
 
+              {isNoOpEdit && (
+                <p className="text-xs text-gray-500">
+                  {editType === 'color_adjust' ? 'Adjust brightness or saturation' : 'Adjust the crop area'} before applying — this wouldn&apos;t change the image.
+                </p>
+              )}
+
               <button
                 type="submit"
-                disabled={status === 'busy'}
+                disabled={status === 'busy' || isNoOpEdit}
                 className="w-full bg-violet-600 hover:bg-violet-500 disabled:bg-gray-800 disabled:text-gray-600 text-white py-2.5 rounded-lg text-sm font-medium transition-colors"
               >
                 {status === 'busy' ? 'Applying…' : 'Apply Edit →'}
