@@ -174,7 +174,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     await uploadToSessionBucket(pdfPath, pdfBuffer, 'application/pdf', { upsert: true })
 
     // Only now commit the finalized state.
-    await markStepFinal(finalStep.id)
+    await markStepFinal(finalStep.id, sessionId)
     if (!alreadyFinalized) {
       await finalizeSession(sessionId, finalStep.id, sessionRootHash, polygonAnchorTx)
     }

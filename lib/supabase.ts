@@ -195,8 +195,19 @@ export async function getSessionSteps(sessionId: string): Promise<StepRecord[]> 
   return data as StepRecord[]
 }
 
-export async function markStepFinal(stepId: string): Promise<void> {
-  const { error } = await getAdmin().from('genid_steps').update({ is_final_selection: true }).eq('id', stepId)
+export async function markStepFinal(stepId: string, sessionId: string): Promise<void> {
+  const admin = getAdmin()
+
+  // Clear any prior final flag session-wide first — finalize can run again on
+  // an already-finalized session (recovery path) or re-pick a different step,
+  // and without this a step marked final earlier keeps its badge forever.
+  const { error: clearErr } = await admin
+    .from('genid_steps')
+    .update({ is_final_selection: false })
+    .eq('session_id', sessionId)
+  if (clearErr) throw new Error(`Failed to clear prior final step: ${clearErr.message}`)
+
+  const { error } = await admin.from('genid_steps').update({ is_final_selection: true }).eq('id', stepId)
   if (error) throw new Error(`Failed to mark step final: ${error.message}`)
 }
 
