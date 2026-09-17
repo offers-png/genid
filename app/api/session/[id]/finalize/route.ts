@@ -11,7 +11,7 @@ import {
   type StepRecord,
 } from '@/lib/supabase'
 import { downloadFromSessionBucket, uploadToSessionBucket, c2paExportStoragePath } from '@/lib/storage'
-import { generateCertificatePdf, type CertificateStep } from '@/lib/certificate'
+import { generateCertificatePdf, buildCertificateSteps, type CertificateStep } from '@/lib/certificate'
 import { computeSessionRootHash } from '@/lib/chain'
 import { stampOnBlockchain } from '@/lib/blockchain'
 import { embedC2paManifest } from '@/lib/c2pa'
@@ -120,20 +120,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       Math.round((generatedAt.getTime() - new Date(session.created_at).getTime()) / 1000)
     )
 
-    const certificateSteps: CertificateStep[] = await Promise.all(
-      steps.map(async (step): Promise<CertificateStep> => ({
-        stepNumber: step.step_number,
-        stepType: step.step_type,
-        editType: step.edit_type,
-        promptText: step.prompt_text,
-        userNote: step.user_note,
-        outputHash: step.output_hash,
-        stepSignature: step.step_signature,
-        responseTimestamp: step.response_timestamp,
-        imageBuffer: step.output_storage_path ? await downloadFromSessionBucket(step.output_storage_path) : null,
-        isFinal: step.id === finalStep.id,
-      }))
-    )
+    const certificateSteps: CertificateStep[] = await buildCertificateSteps(steps, finalStep.id)
 
     const publicVerifyUrl = `${env.appUrl}/session/verify/${sessionId}`
 

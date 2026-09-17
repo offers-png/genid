@@ -58,6 +58,7 @@ export default function SessionWorkspace({
     initialFinalStepId ?? initialSteps[initialSteps.length - 1]?.id ?? null
   )
   const [certificate, setCertificate] = useState<CertificateView | null>(initialCertificate)
+  const [regenerating, setRegenerating] = useState(false)
 
   const [panel, setPanel] = useState<ActionPanel>('none')
   const [note, setNote] = useState('')
@@ -164,6 +165,36 @@ export default function SessionWorkspace({
       setError('Network error — please try again')
       setStatus('active')
     }
+  }
+
+  // Refreshes the PDF's layout/content against already-committed data (root
+  // hash, Polygon anchor, C2PA status) — no re-anchoring, no re-signing.
+  // Exists because finalize itself is deliberately idempotent once a
+  // certificate exists, so a template-only improvement never reaches a
+  // session finalized before it shipped unless something calls this.
+  async function handleRegenerateCertificate() {
+    setRegenerating(true)
+    setError('')
+
+    try {
+      const res = await fetch(`/api/session/${sessionId}/certificate/regenerate`, { method: 'POST' })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setError(data.error ?? 'Certificate regeneration failed')
+        setRegenerating(false)
+        return
+      }
+
+      setCertificate({
+        certificateId: data.certificateId,
+        verifyUrl: data.verifyUrl,
+        c2paManifestEmbedded: data.c2paManifestEmbedded ?? false,
+      })
+    } catch {
+      setError('Network error — please try again')
+    }
+    setRegenerating(false)
   }
 
   return (
@@ -404,6 +435,13 @@ export default function SessionWorkspace({
                 Verify This Session ↗
               </a>
             )}
+            <button
+              onClick={handleRegenerateCertificate}
+              disabled={regenerating}
+              className="text-xs text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-50"
+            >
+              {regenerating ? 'Refreshing certificate…' : 'Refresh certificate layout'}
+            </button>
             <button
               onClick={() => router.push('/session')}
               className="border border-gray-700 hover:border-gray-500 text-gray-300 py-2.5 rounded-lg text-sm transition-colors"

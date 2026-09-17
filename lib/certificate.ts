@@ -1,4 +1,6 @@
 import PDFDocument from 'pdfkit'
+import type { StepRecord } from './supabase'
+import { downloadFromSessionBucket } from './storage'
 
 export interface CertificateStep {
   stepNumber: number
@@ -11,6 +13,28 @@ export interface CertificateStep {
   responseTimestamp: string | null
   imageBuffer: Buffer | null
   isFinal: boolean
+}
+
+// Shared by the finalize route and the certificate-regenerate route, so
+// both build the exact same timeline from the same source data. Downloads
+// whatever is CURRENTLY stored at each step's path — for an already-
+// archived non-final step (lib/lifecycle.ts) that's the compressed copy,
+// which is expected and fine for a certificate thumbnail.
+export async function buildCertificateSteps(steps: StepRecord[], finalStepId: string): Promise<CertificateStep[]> {
+  return Promise.all(
+    steps.map(async (step): Promise<CertificateStep> => ({
+      stepNumber: step.step_number,
+      stepType: step.step_type,
+      editType: step.edit_type,
+      promptText: step.prompt_text,
+      userNote: step.user_note,
+      outputHash: step.output_hash,
+      stepSignature: step.step_signature,
+      responseTimestamp: step.response_timestamp,
+      imageBuffer: step.output_storage_path ? await downloadFromSessionBucket(step.output_storage_path) : null,
+      isFinal: step.id === finalStepId,
+    }))
+  )
 }
 
 // Authorship Certificate (Build Spec Section 3.2.7, extended per Section
