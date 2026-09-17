@@ -118,6 +118,7 @@ export interface StepRecord {
   user_note: string | null
   auto_suggested_note: string | null
   is_final_selection: boolean
+  output_archived: boolean
   created_at: string
 }
 
@@ -177,7 +178,7 @@ export async function finalizeSession(
   if (error) throw new Error(`Failed to finalize session: ${error.message}`)
 }
 
-export async function createStep(entry: Omit<StepRecord, 'id' | 'created_at'>): Promise<StepRecord> {
+export async function createStep(entry: Omit<StepRecord, 'id' | 'created_at' | 'output_archived'>): Promise<StepRecord> {
   const { data, error } = await getAdmin().from('genid_steps').insert(entry).select().single()
   if (error || !data) throw new Error(`Failed to create step: ${error?.message}`)
   return data as StepRecord
@@ -197,6 +198,11 @@ export async function getSessionSteps(sessionId: string): Promise<StepRecord[]> 
 export async function markStepFinal(stepId: string): Promise<void> {
   const { error } = await getAdmin().from('genid_steps').update({ is_final_selection: true }).eq('id', stepId)
   if (error) throw new Error(`Failed to mark step final: ${error.message}`)
+}
+
+export async function markStepArchived(stepId: string): Promise<void> {
+  const { error } = await getAdmin().from('genid_steps').update({ output_archived: true }).eq('id', stepId)
+  if (error) throw new Error(`Failed to mark step archived: ${error.message}`)
 }
 
 export async function setSessionC2paManifestId(sessionId: string, manifestId: string): Promise<void> {

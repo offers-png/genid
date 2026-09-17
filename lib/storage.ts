@@ -39,3 +39,12 @@ export async function downloadFromSessionBucket(path: string): Promise<Buffer> {
   if (error || !data) throw new Error(`Storage download failed: ${error?.message ?? 'not found'}`)
   return Buffer.from(await data.arrayBuffer())
 }
+
+// Sums the size of every object stored under a session's prefix (step
+// outputs, the certificate PDF, the C2PA export) — the basic per-session
+// storage-cost visibility called for in Build Spec Section 7.1.4.
+export async function getSessionStorageBytes(sessionId: string): Promise<number> {
+  const { data, error } = await getAdmin().storage.from(BUCKET).list(sessionId)
+  if (error || !data) return 0
+  return data.reduce((sum, file) => sum + (file.metadata?.size ?? 0), 0)
+}

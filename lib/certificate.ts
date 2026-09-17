@@ -1,4 +1,6 @@
 import PDFDocument from 'pdfkit'
+import type { StepRecord } from './supabase'
+import { downloadFromSessionBucket } from './storage'
 
 export interface CertificateStep {
   stepNumber: number
@@ -11,6 +13,28 @@ export interface CertificateStep {
   responseTimestamp: string | null
   imageBuffer: Buffer | null
   isFinal: boolean
+}
+
+// Shared by the finalize route and the certificate-regenerate route, so
+// both build the exact same timeline from the same source data. Downloads
+// whatever is CURRENTLY stored at each step's path — for an already-
+// archived non-final step (lib/lifecycle.ts) that's the compressed copy,
+// which is expected and fine for a certificate thumbnail.
+export async function buildCertificateSteps(steps: StepRecord[], finalStepId: string): Promise<CertificateStep[]> {
+  return Promise.all(
+    steps.map(async (step): Promise<CertificateStep> => ({
+      stepNumber: step.step_number,
+      stepType: step.step_type,
+      editType: step.edit_type,
+      promptText: step.prompt_text,
+      userNote: step.user_note,
+      outputHash: step.output_hash,
+      stepSignature: step.step_signature,
+      responseTimestamp: step.response_timestamp,
+      imageBuffer: step.output_storage_path ? await downloadFromSessionBucket(step.output_storage_path) : null,
+      isFinal: step.id === finalStepId,
+    }))
+  )
 }
 
 // Authorship Certificate (Build Spec Section 3.2.7, extended per Section
@@ -26,6 +50,8 @@ export function generateCertificatePdf(params: {
   generatedAt: Date
   verifyUrl?: string
   c2paManifestEmbedded?: boolean
+  sessionRootHash?: string
+  polygonAnchorTx?: string | null
 }): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50 })
@@ -111,6 +137,31 @@ export function generateCertificatePdf(params: {
       doc.fillColor('#000000')
       doc.moveDown(0.8)
     }
+
+    ensureSpace(80)
+    doc.fontSize(15).text('Blockchain Anchor', { underline: true })
+    doc.moveDown(0.4)
+    if (params.polygonAnchorTx) {
+      doc.fontSize(9).text(
+        'The session root hash below was anchored to the Polygon blockchain at finalize time — the ' +
+          'transaction was confirmed on-chain before this certificate was generated.'
+      )
+      doc.moveDown(0.3)
+      doc.font('Courier').fontSize(9)
+      if (params.sessionRootHash) doc.text(`Session root hash: ${params.sessionRootHash}`)
+      doc.text(`Polygon transaction: ${params.polygonAnchorTx}`)
+      doc.font('Helvetica').fillColor('#5b21b6')
+      doc.text(`https://polygonscan.com/tx/${params.polygonAnchorTx}`)
+      doc.fillColor('#000000')
+    } else {
+      doc.fontSize(9).fillColor('gray').text(
+        'This session was not anchored to Polygon — blockchain anchoring is optional and non-blocking, ' +
+          'so a network or configuration issue at finalize time does not prevent certificate generation. ' +
+          'The signature chain above does not depend on this anchor to be tamper-evident.'
+      )
+      doc.fillColor('#000000')
+    }
+    doc.moveDown(0.8)
 
     if (params.c2paManifestEmbedded) {
       ensureSpace(60)

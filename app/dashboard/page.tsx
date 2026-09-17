@@ -161,9 +161,14 @@ export default function DashboardPage() {
           <div>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">Your Sessions</h2>
-              <Link href="/session" className="text-sm text-violet-400 hover:text-violet-300">
-                + New Session
-              </Link>
+              <div className="flex items-center gap-4">
+                <Link href="/dashboard/storage" className="text-sm text-gray-400 hover:text-gray-300">
+                  Storage usage
+                </Link>
+                <Link href="/session" className="text-sm text-violet-400 hover:text-violet-300">
+                  + New Session
+                </Link>
+              </div>
             </div>
             {sessions.length === 0 ? (
               <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-8 text-center text-gray-500">
