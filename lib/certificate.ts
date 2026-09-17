@@ -26,6 +26,8 @@ export function generateCertificatePdf(params: {
   generatedAt: Date
   verifyUrl?: string
   c2paManifestEmbedded?: boolean
+  sessionRootHash?: string
+  polygonAnchorTx?: string | null
 }): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50 })
@@ -111,6 +113,31 @@ export function generateCertificatePdf(params: {
       doc.fillColor('#000000')
       doc.moveDown(0.8)
     }
+
+    ensureSpace(80)
+    doc.fontSize(15).text('Blockchain Anchor', { underline: true })
+    doc.moveDown(0.4)
+    if (params.polygonAnchorTx) {
+      doc.fontSize(9).text(
+        'The session root hash below was anchored to the Polygon blockchain at finalize time — the ' +
+          'transaction was confirmed on-chain before this certificate was generated.'
+      )
+      doc.moveDown(0.3)
+      doc.font('Courier').fontSize(9)
+      if (params.sessionRootHash) doc.text(`Session root hash: ${params.sessionRootHash}`)
+      doc.text(`Polygon transaction: ${params.polygonAnchorTx}`)
+      doc.font('Helvetica').fillColor('#5b21b6')
+      doc.text(`https://polygonscan.com/tx/${params.polygonAnchorTx}`)
+      doc.fillColor('#000000')
+    } else {
+      doc.fontSize(9).fillColor('gray').text(
+        'This session was not anchored to Polygon — blockchain anchoring is optional and non-blocking, ' +
+          'so a network or configuration issue at finalize time does not prevent certificate generation. ' +
+          'The signature chain above does not depend on this anchor to be tamper-evident.'
+      )
+      doc.fillColor('#000000')
+    }
+    doc.moveDown(0.8)
 
     if (params.c2paManifestEmbedded) {
       ensureSpace(60)

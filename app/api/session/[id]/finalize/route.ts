@@ -15,6 +15,7 @@ import { generateCertificatePdf, type CertificateStep } from '@/lib/certificate'
 import { computeSessionRootHash } from '@/lib/chain'
 import { stampOnBlockchain } from '@/lib/blockchain'
 import { embedC2paManifest } from '@/lib/c2pa'
+import { archiveNonFinalSteps } from '@/lib/lifecycle'
 import { env } from '@/lib/env'
 
 // POST { stepId? } — the "finalize" button (Build Spec Sections 3.2.7 and
@@ -178,6 +179,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       generatedAt,
       verifyUrl: publicVerifyUrl,
       c2paManifestEmbedded: c2paManifestId !== null,
+      sessionRootHash,
+      polygonAnchorTx,
     })
 
     const pdfPath = `${sessionId}/certificate.pdf`
@@ -190,6 +193,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
     if (c2paManifestId) {
       await setSessionC2paManifestId(sessionId, c2paManifestId)
+    }
+
+    // Storage lifecycle (Build Spec Section 7) — compress every non-final
+    // step's stored output now that the session is finalized. Non-fatal and
+    // idempotent (skips already-archived steps), so a re-run of finalize on
+    // an already-finalized session just leaves this as a no-op.
+    try {
+      await archiveNonFinalSteps(sessionId)
+    } catch (archiveErr) {
+      console.error('Non-final step archival failed (non-fatal):', archiveErr)
     }
 
     const certificate = await createCertificate({

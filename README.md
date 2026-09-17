@@ -56,6 +56,7 @@ Run the migrations, in order, in your Supabase SQL editor:
 # supabase/migrations/001_genid_registry.sql
 # supabase/migrations/002_verification_status.sql
 # supabase/migrations/003_sessions_steps_certificates.sql
+# supabase/migrations/004_storage_lifecycle.sql
 # Paste each into Supabase Dashboard → SQL Editor and run in order.
 ```
 
@@ -93,6 +94,10 @@ App runs at `http://localhost:3000`
 - GENID verification status is **immutable** once granted
 - Notary signatures use **HMAC-SHA256** with a server-side secret
 - Only the server's `service_role` key can write to the database
+
+See [`DATA_RETENTION.md`](./DATA_RETENTION.md) for what's stored, how long,
+and what compression after finalize does and doesn't change. A basic
+per-session storage-usage view is at `/dashboard/storage`.
 
 ## License
 

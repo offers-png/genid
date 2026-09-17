@@ -95,6 +95,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // independent AI generations producing identical bytes isn't a
     // realistic no-op case.
     if (stepType === 'edit' && outputHash === priorStep.output_hash) {
+      console.warn(
+        `No-op ${editType} edit rejected for session ${sessionId}, step ${nextStepNumber}: output identical to prior step ${priorStep.step_number}.`
+      )
       return NextResponse.json(
         { error: 'This edit produced no change from the previous version. Adjust the crop or color values before applying.' },
         { status: 400 }

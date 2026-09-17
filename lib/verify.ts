@@ -20,12 +20,20 @@ import { env } from './env'
 //    Caught by chainLinkValid: each step's stored prior_step_signature is
 //    compared against the actual current step_signature of the row that
 //    precedes it, not just trusted at face value.
+//
+// A step whose output_archived flag is set (lib/lifecycle.ts, Build Spec
+// Section 7) is EXPECTED to fail fileHashValid — its stored file was
+// deliberately replaced with a compressed archival copy after finalize, so
+// re-hashing it can never match the original output_hash again. That's not
+// tampering, so it doesn't fail the step; signatureValid and chainLinkValid
+// still have to hold, since those don't depend on the file surviving.
 
 export interface StepVerification {
   stepId: string
   stepNumber: number
   stepType: string
   fileHashValid: boolean
+  fileArchived: boolean
   signatureValid: boolean
   chainLinkValid: boolean
   valid: boolean
@@ -103,9 +111,10 @@ export async function verifySession(sessionId: string): Promise<SessionVerificat
       stepNumber: step.step_number,
       stepType: step.step_type,
       fileHashValid,
+      fileArchived: step.output_archived,
       signatureValid,
       chainLinkValid,
-      valid: fileHashValid && signatureValid && chainLinkValid,
+      valid: (fileHashValid || step.output_archived) && signatureValid && chainLinkValid,
     })
 
     signaturesInOrder.push(step.step_signature ?? '')
