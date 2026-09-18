@@ -20,6 +20,7 @@ export async function GET(req: NextRequest) {
     genidCode: record.genid_code,
     creatorName: record.user_name,
     verified: record.verified,
+    nameVerified: record.name_verified ?? false,
     registeredAt: record.created_at,
     contentCount: history.length,
     recentContent: history.slice(0, 5),

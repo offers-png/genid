@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession, getSessionSteps, getCertificateForSession, lookupGenid } from '@/lib/supabase'
+import { getAuthenticatedRecord } from '@/lib/auth'
 import { uploadToSessionBucket } from '@/lib/storage'
 import { generateCertificatePdf, buildCertificateSteps } from '@/lib/certificate'
 import { env } from '@/lib/env'
@@ -17,13 +18,21 @@ import { env } from '@/lib/env'
 // that code shipped. This route is the deliberate escape hatch for exactly
 // that case — safe to call as often as needed since it changes nothing
 // about the chain, the anchor, or the manifest, only how they're rendered.
-export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id: sessionId } = await params
+
+    const caller = await getAuthenticatedRecord(req)
+    if (!caller) {
+      return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
+    }
 
     const session = await getSession(sessionId)
     if (!session) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+    }
+    if (session.genid_code !== caller.genid_code) {
+      return NextResponse.json({ error: 'You do not have access to this session.' }, { status: 403 })
     }
     if (session.status !== 'finalized') {
       return NextResponse.json({ error: 'Session is not finalized yet — use finalize instead' }, { status: 409 })

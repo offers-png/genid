@@ -1,21 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { lookupByEmail, listSessionsForGenid } from '@/lib/supabase'
+import { listSessionsForGenid } from '@/lib/supabase'
+import { getAuthenticatedRecord } from '@/lib/auth'
 import { getSessionStorageBytes } from '@/lib/storage'
 
-// GET ?email= — per-session storage usage for one identity (Build Spec
+// GET — per-session storage usage for the SIGNED-IN identity (Build Spec
 // Section 7.1.4: "build a storage-cost dashboard early... so you see
 // per-user storage growth before it becomes a surprise bill"). Kept
 // separate from GET /api/session so the main session list stays fast —
-// this one does a Storage list() call per session.
+// this one does a Storage list() call per session. Previously took a bare
+// ?email= — same ownership gap as GET /api/session, fixed the same way.
 export async function GET(req: NextRequest) {
-  const email = req.nextUrl.searchParams.get('email')
-  if (!email) {
-    return NextResponse.json({ error: 'email is required' }, { status: 400 })
-  }
-
-  const record = await lookupByEmail(email)
+  const record = await getAuthenticatedRecord(req)
   if (!record) {
-    return NextResponse.json({ error: 'No GENID found for this email' }, { status: 404 })
+    return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
   }
 
   const sessions = await listSessionsForGenid(record.genid_code)

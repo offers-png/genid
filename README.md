@@ -57,6 +57,11 @@ Run the migrations, in order, in your Supabase SQL editor:
 # supabase/migrations/002_verification_status.sql
 # supabase/migrations/003_sessions_steps_certificates.sql
 # supabase/migrations/004_storage_lifecycle.sql
+# supabase/migrations/005_verified_name_binding.sql
+# supabase/migrations/006_registry_rls_hardening.sql
+# supabase/migrations/007_finalize_atomicity.sql
+# supabase/migrations/008_archive_integrity.sql
+# supabase/migrations/009_auth_and_lock_recovery.sql
 # Paste each into Supabase Dashboard → SQL Editor and run in order.
 ```
 
@@ -70,13 +75,42 @@ session step outputs and certificate PDFs, served only through API routes).
 3. Select event: `identity.verification_session.verified`
 4. Copy the signing secret to `STRIPE_WEBHOOK_SECRET`
 
-### 5. Run locally
+### 5. Configure sign-in (magic link)
+
+Session ownership (creating, viewing, editing, and finalizing sessions) is
+gated behind a signed-in identity, not a bare email string — see
+`lib/auth.ts`. Set `AUTH_SESSION_SECRET` (a random 32+ char value, different
+from `GENID_SIGNING_SECRET`) and a `RESEND_API_KEY` for magic-link email
+delivery via [Resend](https://resend.com)'s HTTP API. Without `RESEND_API_KEY`
+set, sign-in links are only logged to the console — refused outright when
+`NODE_ENV=production` (`lib/mailer.ts`).
+
+If you already have verified accounts from before this shipped, run
+`node scripts/reconcile-verified-names.mjs` (dry run by default, `--apply`
+to write) to backfill `name_verified` for accounts where Stripe still has a
+verified name on file.
+
+### 6. Run locally
 
 ```bash
 npm run dev
 ```
 
 App runs at `http://localhost:3000`
+
+### 7. Run tests
+
+```bash
+npm test
+```
+
+Covers: session ownership (unauthorized access rejected on every gated
+route), `/api/verify` content binding (a valid signature alone isn't enough
+— the uploaded bytes have to match an authenticated content record),
+finalize concurrency and lock recovery (crash/stale-lock reclaim, lock
+release on validation failure), Stripe verified-name binding, and archive
+signature binding (session/step/hash-bound, tamper and cross-step replay
+rejected).
 
 ## Deployment (Render)
 
@@ -94,6 +128,15 @@ App runs at `http://localhost:3000`
 - GENID verification status is **immutable** once granted
 - Notary signatures use **HMAC-SHA256** with a server-side secret
 - Only the server's `service_role` key can write to the database
+- Session/content ownership requires a signed-in identity (magic-link
+  cookie, `lib/auth.ts`) — a bare email or session ID is never sufficient
+  to create, view, edit, or finalize someone's content
+- `/api/verify` requires the uploaded file's exact bytes to match a
+  server-side content record, not just an internally-consistent embedded
+  signature — see `app/api/verify/route.ts`
+- Finalize is lock-protected against concurrent calls, with automatic
+  recovery from a stale/crashed lock — see `lib/supabase.ts`
+  (`tryBeginFinalizing` / `tryReclaimStaleFinalizing`)
 
 See [`DATA_RETENTION.md`](./DATA_RETENTION.md) for what's stored, how long,
 and what compression after finalize does and doesn't change. A basic

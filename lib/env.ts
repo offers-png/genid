@@ -25,4 +25,12 @@ export const env = {
   get alchemyApiKey()      { return process.env.ALCHEMY_API_KEY },
   get polygonWalletKey()   { return process.env.POLYGON_WALLET_PRIVATE_KEY },
   get appUrl()             { return process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000' },
+  // Signs session cookies and magic-link tokens (lib/auth.ts). Deliberately
+  // separate from GENID_SIGNING_SECRET — that key signs CONTENT (step
+  // hashes, archive hashes); this one authenticates PEOPLE. Mixing the two
+  // security domains under one key means a future leak or cryptanalysis of
+  // either purpose compromises both.
+  get authSessionSecret()  { return getEnv('AUTH_SESSION_SECRET') },
+  get resendApiKey()       { return process.env.RESEND_API_KEY },
+  get authFromEmail()      { return process.env.AUTH_FROM_EMAIL ?? 'GenID <noreply@genid.app>' },
 }

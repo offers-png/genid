@@ -9,9 +9,11 @@ import {
   setSessionC2paManifestId,
   lookupGenid,
   tryBeginFinalizing,
+  tryReclaimStaleFinalizing,
   abortFinalizing,
   type StepRecord,
 } from '@/lib/supabase'
+import { getAuthenticatedRecord } from '@/lib/auth'
 import { downloadFromSessionBucket, uploadToSessionBucket, c2paExportStoragePath } from '@/lib/storage'
 import { generateCertificatePdf, buildCertificateSteps, type CertificateStep } from '@/lib/certificate'
 import { computeSessionRootHash } from '@/lib/chain'
@@ -19,6 +21,26 @@ import { stampOnBlockchain } from '@/lib/blockchain'
 import { embedC2paManifest } from '@/lib/c2pa'
 import { archiveNonFinalSteps } from '@/lib/lifecycle'
 import { env } from '@/lib/env'
+
+// A lock older than this is treated as abandoned (crashed process, killed
+// container) rather than a slow-but-live finalize — see
+// tryReclaimStaleFinalizing. Normal finalize work (PDF + one Polygon call)
+// finishes in well under a minute; 10 minutes gives generous headroom for a
+// genuinely slow anchor call before assuming the original request is dead.
+const STALE_LOCK_MS = 10 * 60 * 1000
+
+// Thrown for any validation/precondition failure once we may already hold
+// the finalize lock. A single catch block below both releases the lock (if
+// held) and maps this to the right HTTP status — so "release the lock on
+// validation failures," not just on unexpected exceptions, is structural
+// rather than something each early-return branch has to remember to do.
+class FinalizeError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
 
 // POST { stepId? } — the "finalize" button (Build Spec Sections 3.2.7 and
 // 4.1.5 "Mark Final"). Marks the caller-chosen step final (defaulting to the
@@ -50,18 +72,37 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const body = await req.json().catch(() => ({}))
     const requestedStepId = (body as { stepId?: string })?.stepId
 
+    const caller = await getAuthenticatedRecord(req)
+    if (!caller) {
+      throw new FinalizeError('Sign in required.', 401)
+    }
+
     const session = await getSession(sessionId)
     if (!session) {
-      return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+      throw new FinalizeError('Session not found', 404)
+    }
+    if (session.genid_code !== caller.genid_code) {
+      throw new FinalizeError('You do not have access to this session.', 403)
     }
     if (session.status === 'abandoned') {
-      return NextResponse.json({ error: 'Session is abandoned' }, { status: 409 })
+      throw new FinalizeError('Session is abandoned', 409)
     }
+
     if (session.status === 'finalizing') {
-      return NextResponse.json(
-        { error: 'Session is already being finalized by another request — try again shortly.' },
-        { status: 409 }
-      )
+      const heldSince = session.finalizing_since ? new Date(session.finalizing_since).getTime() : 0
+      const isStale = Date.now() - heldSince > STALE_LOCK_MS
+      lockAcquired = isStale && (await tryReclaimStaleFinalizing(sessionId, STALE_LOCK_MS))
+      if (!lockAcquired) {
+        throw new FinalizeError(
+          'Session is already being finalized by another request — try again shortly.',
+          409
+        )
+      }
+      // Reclaimed a stale lock: fall through and treat this exactly like a
+      // fresh attempt on an 'active' session. Nothing is committed until
+      // finalizeSession() at the very end, so every step below is safe to
+      // redo — a half-finished prior attempt just gets its work recomputed
+      // or its idempotent writes (anchor, certificate) reused as-is.
     }
 
     const alreadyFinalized = session.status === 'finalized'
@@ -72,12 +113,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // update — the loser gets a clear "already finalizing" error instead of
     // redoing the generation/anchoring/upload work and racing on the final
     // writes.
-    if (!alreadyFinalized) {
+    if (!alreadyFinalized && !lockAcquired) {
       lockAcquired = await tryBeginFinalizing(sessionId)
       if (!lockAcquired) {
-        return NextResponse.json(
-          { error: 'Session is already being finalized by another request — try again shortly.' },
-          { status: 409 }
+        throw new FinalizeError(
+          'Session is already being finalized by another request — try again shortly.',
+          409
         )
       }
     }
@@ -104,22 +145,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // committed; don't let a retry silently change it.
       finalStep = steps.find((s) => s.id === session.final_step_id)
       if (!finalStep) {
-        return NextResponse.json(
-          { error: 'Session is finalized but its final step record is missing — cannot recover' },
-          { status: 500 }
-        )
+        throw new FinalizeError('Session is finalized but its final step record is missing — cannot recover', 500)
       }
     } else {
       finalStep = requestedStepId ? steps.find((s) => s.id === requestedStepId) : steps[steps.length - 1]
       if (!finalStep) {
-        const error = requestedStepId ? 'stepId does not belong to this session' : 'Session has no steps to finalize'
-        return NextResponse.json({ error }, { status: 400 })
+        const message = requestedStepId ? 'stepId does not belong to this session' : 'Session has no steps to finalize'
+        throw new FinalizeError(message, 400)
       }
     }
 
     const record = await lookupGenid(session.genid_code)
     if (!record) {
-      return NextResponse.json({ error: 'Registry record not found for this session' }, { status: 500 })
+      throw new FinalizeError('Registry record not found for this session', 500)
     }
 
     // Root hash covers every step in the chain, in order — not just the
@@ -246,13 +284,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // scoped to WHERE status = 'finalizing' in abortFinalizing, so this is a
     // harmless no-op if the failure happened after finalizeSession() already
     // moved the session to 'finalized' (that case is handled by this same
-    // route's existing stuck-session recovery path instead).
+    // route's existing stuck-session recovery path instead). This runs for
+    // EVERY failure path once the lock is held, including plain validation
+    // errors (FinalizeError), not just unexpected exceptions.
     if (lockAcquired && sessionId) {
       try {
         await abortFinalizing(sessionId)
       } catch (releaseErr) {
         console.error('Failed to release finalize lock:', releaseErr)
       }
+    }
+    if (err instanceof FinalizeError) {
+      return NextResponse.json({ error: err.message }, { status: err.status })
     }
     const message = err instanceof Error ? err.message : 'Finalize failed'
     return NextResponse.json({ error: message }, { status: 500 })

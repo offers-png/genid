@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
-  lookupByEmail,
   createSession,
   createStep,
   listSessionsForGenid,
   getCertificatesForSessions,
 } from '@/lib/supabase'
+import { getAuthenticatedRecord } from '@/lib/auth'
 import { uploadToSessionBucket, stepStoragePath } from '@/lib/storage'
 import { hashBuffer } from '@/lib/steganography'
 import { buildStepContent, computeStepHash, signStepHash } from '@/lib/chain'
@@ -16,17 +16,16 @@ import { env } from '@/lib/env'
 // new file under lib/adapters/ and changing this one line.
 const adapter = openAiImageAdapter
 
-// GET ?email= — lists an identity's sessions (most recent first) so a
+// GET — lists the SIGNED-IN identity's sessions (most recent first), so a
 // session is reachable again from a dashboard, not just its one-time URL.
+// Previously took a bare ?email= query param — anyone who knew a target's
+// email could list their sessions with no proof of ownership. The identity
+// now comes from the session cookie only (Security & Trust Fix Punch List
+// #4, Sept 18 follow-up).
 export async function GET(req: NextRequest) {
-  const email = req.nextUrl.searchParams.get('email')
-  if (!email) {
-    return NextResponse.json({ error: 'email is required' }, { status: 400 })
-  }
-
-  const record = await lookupByEmail(email)
+  const record = await getAuthenticatedRecord(req)
   if (!record) {
-    return NextResponse.json({ error: 'No GENID found for this email' }, { status: 404 })
+    return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
   }
 
   const sessions = await listSessionsForGenid(record.genid_code)
@@ -50,20 +49,22 @@ export async function GET(req: NextRequest) {
   })
 }
 
-// POST { email, promptText }
+// POST { promptText }
 // Creates a session, generates step 1 inside GenID's own pipeline (not
 // uploaded from elsewhere), and signs it. Phase 1 scope: one step, one
-// content type, no iteration yet.
+// content type, no iteration yet. The identity comes from the session
+// cookie, not a client-supplied email — a bare email string used to be
+// enough to create content attributed to anyone's GENID code.
 export async function POST(req: NextRequest) {
   try {
-    const { email, promptText } = await req.json()
-    if (!email || !promptText) {
-      return NextResponse.json({ error: 'email and promptText are required' }, { status: 400 })
+    const { promptText } = await req.json()
+    if (!promptText) {
+      return NextResponse.json({ error: 'promptText is required' }, { status: 400 })
     }
 
-    const record = await lookupByEmail(email)
+    const record = await getAuthenticatedRecord(req)
     if (!record) {
-      return NextResponse.json({ error: 'No GENID found for this email. Please register first.' }, { status: 404 })
+      return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
     }
     if (!record.verified) {
       return NextResponse.json({ error: 'Your identity has not been verified yet.' }, { status: 403 })

@@ -17,6 +17,8 @@ interface VerifyResult {
   platform?: string
   signaturePresent?: boolean
   signatureValid?: boolean
+  contentMatchesRecord?: boolean
+  nameVerified?: boolean
   embeddedHash?: string | null
   message: string
 }
@@ -163,8 +165,11 @@ export default function VerifyPage() {
             <div className="bg-gray-800 rounded-lg p-4">
               <div className="text-xs text-gray-500 mb-1 font-mono">CREATOR</div>
               <div className="text-white font-semibold">{result.creatorName ?? 'Unknown (not in registry)'}</div>
-              {result.identityVerified && (
-                <div className="text-xs text-green-400 mt-1">✓ Identity Verified</div>
+              {result.identityVerified && result.nameVerified && (
+                <div className="text-xs text-green-400 mt-1">✓ Identity &amp; Name Verified</div>
+              )}
+              {result.identityVerified && !result.nameVerified && (
+                <div className="text-xs text-yellow-400 mt-1">✓ Identity Verified — name self-reported</div>
               )}
             </div>
             <div className="bg-gray-800 rounded-lg p-4">
@@ -199,6 +204,20 @@ export default function VerifyPage() {
                   : result.signaturePresent
                     ? 'A signature was found but did not validate. The image may have been re-stamped or the secret rotated.'
                     : 'GENID code valid, but no HMAC signature was embedded. Stamped before the notary feature shipped.'}
+              </div>
+            </div>
+          )}
+
+          {result.creatorName && result.signatureValid && (
+            <div className="bg-gray-800 rounded-lg p-4">
+              <div className="text-xs text-gray-500 mb-1 font-mono">CONTENT MATCH</div>
+              <div className={`font-semibold ${result.contentMatchesRecord ? 'text-green-400' : 'text-red-400'}`}>
+                {result.contentMatchesRecord ? '✓ Matches Authenticated Record' : '✗ Does Not Match Authenticated Record'}
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                {result.contentMatchesRecord
+                  ? 'These exact file bytes match what was logged at stamp time — a valid signature alone is not enough, since a signature embedded in a few pixels can survive edits to the rest of the image.'
+                  : 'The embedded signature is internally consistent, but these file bytes don’t match any authenticated record for this GENID. This may be a copy, re-save, or partial edit of a previously stamped image, not the original.'}
               </div>
             </div>
           )}

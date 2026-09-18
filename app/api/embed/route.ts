@@ -1,25 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
 // Note: stampedBuffer response uses native Response (not NextResponse) for binary compatibility
 import { embedGenid, hashBuffer, generateNotarySignature } from '@/lib/steganography'
-import { lookupByEmail, logContent } from '@/lib/supabase'
+import { logContent } from '@/lib/supabase'
+import { getAuthenticatedRecord } from '@/lib/auth'
 import { stampOnBlockchain } from '@/lib/blockchain'
 import { env } from '@/lib/env'
 
-// POST multipart/form-data: { email, image }
-// Returns: the steganographically-stamped image with embedded notary signature
+// POST multipart/form-data: { image }
+// Returns: the steganographically-stamped image with embedded notary signature.
+// Previously took a bare `email` form field to decide whose GENID code to
+// stamp with — anyone who knew a target's email could embed content (and
+// trigger a Polygon anchor transaction) attributed to that identity. The
+// caller's identity now comes from their session cookie.
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData()
-    const email = formData.get('email') as string
     const imageFile = formData.get('image') as File
 
-    if (!email || !imageFile) {
-      return NextResponse.json({ error: 'Email and image are required' }, { status: 400 })
+    if (!imageFile) {
+      return NextResponse.json({ error: 'Image is required' }, { status: 400 })
     }
 
-    const record = await lookupByEmail(email)
+    const record = await getAuthenticatedRecord(req)
     if (!record) {
-      return NextResponse.json({ error: 'No GENID found for this email. Please register first.' }, { status: 404 })
+      return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
     }
     if (!record.verified) {
       return NextResponse.json({ error: 'Your identity has not been verified yet.' }, { status: 403 })

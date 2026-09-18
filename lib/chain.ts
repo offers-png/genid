@@ -17,6 +17,17 @@ export function computeSessionRootHash(signaturesInOrder: string[]): string {
   return crypto.createHash('sha256').update(signaturesInOrder.join('')).digest('hex')
 }
 
+// Archive signature content (Build Spec Section 7, Punch List #5 follow-up
+// "bind archive signatures to the session, step, and original hash").
+// Signing archive_hash alone would let an archive_hash/archive_signature
+// pair computed for one step validate for any OTHER step whose compressed
+// file happens to hash the same way — binding session/step/output_hash
+// into the signed content, the same way buildStepContent binds a step's
+// own hash, closes that off.
+export function buildArchiveContent(sessionId: string, stepId: string, outputHash: string, archiveHash: string): string {
+  return [sessionId, stepId, outputHash, archiveHash].join(':')
+}
+
 export interface StepContentInput {
   sessionId: string
   stepNumber: number

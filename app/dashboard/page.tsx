@@ -1,12 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 
 interface GenidRecord {
-  genid_code: string
-  user_name: string
+  genidCode: string
+  creatorName: string
   verified: boolean
+  nameVerified: boolean
   registeredAt: string
   contentCount: number
   recentContent: ContentEntry[]
@@ -31,89 +33,88 @@ interface SessionSummary {
   certificate: { id: string; verifyUrl: string | null } | null
 }
 
+type LoadState = 'loading' | 'signed_out' | 'ready' | 'error'
+
 export default function DashboardPage() {
-  const [email, setEmail] = useState('')
-  const [loading, setLoading] = useState(false)
+  const router = useRouter()
+  const [state, setState] = useState<LoadState>('loading')
   const [record, setRecord] = useState<GenidRecord | null>(null)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [error, setError] = useState('')
 
-  async function handleLookup(e: React.FormEvent) {
-    e.preventDefault()
-    setLoading(true)
-    setError('')
-    setRecord(null)
-    setSessions([])
+  useEffect(() => {
+    let cancelled = false
 
-    try {
-      // First get the genid_code from email
-      const emailRes = await fetch(`/api/genid/issue?email=${encodeURIComponent(email)}`)
-      const emailData = await emailRes.json()
+    async function load() {
+      try {
+        const meRes = await fetch('/api/auth/me')
+        if (meRes.status === 401) {
+          if (!cancelled) setState('signed_out')
+          return
+        }
+        if (!meRes.ok) throw new Error('Failed to load session')
+        const me = await meRes.json()
 
-      if (!emailRes.ok) {
-        setError(emailData.error ?? 'No GENID found for this email.')
-        setLoading(false)
-        return
+        const [codeRes, sessionsRes] = await Promise.all([
+          fetch(`/api/genid/lookup?code=${encodeURIComponent(me.genidCode)}`),
+          fetch('/api/session'),
+        ])
+        const codeData = await codeRes.json()
+        if (!codeRes.ok) throw new Error(codeData.error ?? 'Lookup failed')
+
+        if (cancelled) return
+        setRecord(codeData)
+        if (sessionsRes.ok) {
+          const sessionsData = await sessionsRes.json()
+          setSessions(sessionsData.sessions ?? [])
+        }
+        setState('ready')
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Network error — please try again')
+          setState('error')
+        }
       }
-
-      // Then look up full record with content history, and sessions, in parallel
-      const [codeRes, sessionsRes] = await Promise.all([
-        fetch(`/api/genid/lookup?code=${encodeURIComponent(emailData.genid_code)}`),
-        fetch(`/api/session?email=${encodeURIComponent(email)}`),
-      ])
-      const codeData = await codeRes.json()
-
-      if (!codeRes.ok) {
-        setError(codeData.error ?? 'Lookup failed.')
-        setLoading(false)
-        return
-      }
-
-      setRecord(codeData)
-      if (sessionsRes.ok) {
-        const sessionsData = await sessionsRes.json()
-        setSessions(sessionsData.sessions ?? [])
-      }
-    } catch {
-      setError('Network error — please try again')
     }
-    setLoading(false)
+
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  async function handleSignOut() {
+    await fetch('/api/auth/logout', { method: 'POST' })
+    router.push('/login')
   }
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-16">
-      <div className="mb-10">
-        <h1 className="text-3xl font-bold text-white mb-2">Your GENID Dashboard</h1>
-        <p className="text-gray-400">Enter your registered email to view your GENID and stamping history.</p>
+      <div className="mb-10 flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-white mb-2">Your GENID Dashboard</h1>
+          <p className="text-gray-400">Your GENID and stamping history.</p>
+        </div>
+        {state === 'ready' && (
+          <button onClick={handleSignOut} className="text-sm text-gray-400 hover:text-gray-300 whitespace-nowrap">
+            Sign out
+          </button>
+        )}
       </div>
 
-      <form onSubmit={handleLookup} className="flex gap-3 mb-10">
-        <input
-          type="email"
-          required
-          value={email}
-          onChange={e => setEmail(e.target.value)}
-          placeholder="you@example.com"
-          className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-violet-500 transition-colors"
-        />
-        <button
-          type="submit"
-          disabled={loading}
-          className="bg-violet-600 hover:bg-violet-500 disabled:bg-violet-800 text-white px-6 py-3 rounded-lg font-medium transition-colors whitespace-nowrap"
-        >
-          {loading ? 'Loading...' : 'Load Dashboard'}
-        </button>
-      </form>
+      {state === 'loading' && <div className="text-gray-500 text-sm">Loading…</div>}
 
-      {error && (
-        <div className="bg-red-950/50 border border-red-800 rounded-lg p-4 text-sm text-red-300 mb-6">
-          {error}
-          {error.includes('No GENID') && (
-            <div className="mt-2">
-              <a href="/register" className="text-violet-400 hover:text-violet-300">Register for a GENID →</a>
-            </div>
-          )}
+      {state === 'signed_out' && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
+          <p className="text-gray-400 mb-4">Sign in to view your GENID dashboard.</p>
+          <Link href="/login" className="bg-violet-600 hover:bg-violet-500 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-block">
+            Sign in →
+          </Link>
         </div>
+      )}
+
+      {state === 'error' && (
+        <div className="bg-red-950/50 border border-red-800 rounded-lg p-4 text-sm text-red-300 mb-6">{error}</div>
       )}
 
       {record && (
@@ -122,8 +123,11 @@ export default function DashboardPage() {
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <div className="text-xs text-gray-500 font-mono mb-1">VERIFIED CREATOR</div>
-                <div className="text-xl font-semibold text-white">{record.user_name}</div>
+                <div className="text-xs text-gray-500 font-mono mb-1">CREATOR</div>
+                <div className="text-xl font-semibold text-white">{record.creatorName}</div>
+                {record.verified && !record.nameVerified && (
+                  <div className="text-xs text-yellow-400 mt-1">Name self-reported, not ID-verified</div>
+                )}
               </div>
               <div className={`px-3 py-1 rounded-full text-xs font-medium ${record.verified ? 'bg-green-900/50 text-green-400 border border-green-800' : 'bg-yellow-900/50 text-yellow-400 border border-yellow-800'}`}>
                 {record.verified ? '✓ Identity Verified' : '⏳ Pending Verification'}
@@ -133,7 +137,7 @@ export default function DashboardPage() {
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-gray-800 rounded-lg p-4">
                 <div className="text-xs text-gray-500 mb-1 font-mono">GENID CODE</div>
-                <div className="font-mono font-bold text-violet-400 text-2xl tracking-widest">{record.genid_code}</div>
+                <div className="font-mono font-bold text-violet-400 text-2xl tracking-widest">{record.genidCode}</div>
               </div>
               <div className="bg-gray-800 rounded-lg p-4">
                 <div className="text-xs text-gray-500 mb-1 font-mono">TOTAL STAMPS</div>

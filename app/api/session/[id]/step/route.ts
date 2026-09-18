@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession, getSessionSteps, createStep } from '@/lib/supabase'
+import { getAuthenticatedRecord } from '@/lib/auth'
 import { uploadToSessionBucket, downloadFromSessionBucket, stepStoragePath } from '@/lib/storage'
 import { hashBuffer } from '@/lib/steganography'
 import { buildStepContent, computeStepHash, signStepHash } from '@/lib/chain'
@@ -24,9 +25,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const body = await req.json()
     const { action, userNote } = body as { action?: string; userNote?: string }
 
+    const caller = await getAuthenticatedRecord(req)
+    if (!caller) {
+      return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
+    }
+
     const session = await getSession(sessionId)
     if (!session) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+    }
+    if (session.genid_code !== caller.genid_code) {
+      return NextResponse.json({ error: 'You do not have access to this session.' }, { status: 403 })
     }
     if (session.status !== 'active') {
       return NextResponse.json({ error: `Session is ${session.status}, cannot add steps` }, { status: 409 })

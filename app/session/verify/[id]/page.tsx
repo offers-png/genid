@@ -84,7 +84,7 @@ export default async function VerifySessionPage({ params }: { params: Promise<{ 
             <div className="flex gap-4 text-xs text-gray-500 font-mono">
               <span
                 className={
-                  (step.fileArchived ? step.archiveIntegrityValid !== false : step.fileHashValid)
+                  (step.fileArchived ? step.archiveIntegrityValid === true : step.fileHashValid)
                     ? 'text-gray-500'
                     : 'text-red-400'
                 }
@@ -97,12 +97,9 @@ export default async function VerifySessionPage({ params }: { params: Promise<{ 
             {step.fileArchived && (
               <p className="text-xs text-gray-600 mt-2">
                 This step&apos;s stored file was compressed for archival after finalize, per the retention policy.
-                {step.archiveIntegrityValid === true &&
-                  ' The compressed file has been checked against the hash recorded at archive time — that is a different, weaker guarantee than an unarchived step’s file hash, which matches the original output_hash directly.'}
-                {step.archiveIntegrityValid === false &&
-                  ' The compressed file does NOT match the hash recorded at archive time — its signature chain is still intact, but the archived file itself should not be trusted.'}
-                {step.archiveIntegrityValid === null &&
-                  ' This step was archived before archive integrity tracking existed, so the compressed file cannot be checked against anything — its signature chain is still intact.'}
+                {step.archiveIntegrityValid === true
+                  ? ' The compressed file has been checked against a hash and signature bound to this exact session/step/original-hash, recorded at archive time — a different, weaker guarantee than an unarchived step’s file hash, which matches the original output_hash directly.'
+                  : ' No valid archive proof exists for this step’s current file — either none was recorded, or the recorded proof does not match. This step reports as UNVERIFIED even though its signature chain may still be intact, because the archived file’s own integrity cannot be confirmed.'}
               </p>
             )}
           </div>

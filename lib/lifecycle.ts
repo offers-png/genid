@@ -2,7 +2,7 @@ import sharp from 'sharp'
 import { getSession, getSessionSteps, markStepArchived } from './supabase'
 import { downloadFromSessionBucket, uploadToSessionBucket } from './storage'
 import { hashBuffer } from './steganography'
-import { signStepHash } from './chain'
+import { signStepHash, buildArchiveContent } from './chain'
 import { env } from './env'
 
 // Storage lifecycle (Build Spec Section 7). Only ever touches NON-final
@@ -63,7 +63,8 @@ export async function archiveNonFinalSteps(sessionId: string): Promise<ArchiveRe
     await uploadToSessionBucket(step.output_storage_path, compressed, 'image/png', { upsert: true })
 
     const archiveHash = hashBuffer(compressed)
-    const archiveSignature = signStepHash(archiveHash, env.genidSigningSecret)
+    const archiveContent = buildArchiveContent(sessionId, step.id, step.output_hash ?? '', archiveHash)
+    const archiveSignature = signStepHash(archiveContent, env.genidSigningSecret)
     await markStepArchived(step.id, archiveHash, archiveSignature)
 
     result.bytesBefore += original.length
