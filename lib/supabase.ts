@@ -456,6 +456,28 @@ export async function countRecentGenerationsForGenid(genidCode: string, sinceMs:
   return count ?? 0
 }
 
+// Rate limiting for /api/embed (lib/limits.ts) — that route only checked
+// upload size/dimensions, not request rate; nothing stopped one identity
+// from repeatedly stamping (and repeatedly triggering a Polygon anchor
+// attempt) in a tight loop. genid_content_log already gets a row per
+// successful embed (logContent, called from /api/embed), so counting
+// against it needs no new table — same count-then-compare pattern as
+// countRecentGenerationsForGenid above.
+export async function countRecentEmbedsForGenid(genidCode: string, sinceMs: number): Promise<number> {
+  const since = new Date(Date.now() - sinceMs).toISOString()
+  const { count, error } = await getAdmin()
+    .from('genid_content_log')
+    .select('id', { count: 'exact', head: true })
+    .eq('genid_code', genidCode)
+    .gte('created_at', since)
+
+  if (error) {
+    console.error('Failed to count recent embeds (failing open):', error.message)
+    return 0
+  }
+  return count ?? 0
+}
+
 export async function listSessionsForGenid(genidCode: string): Promise<SessionRecord[]> {
   const { data, error } = await getAdmin()
     .from('genid_sessions')

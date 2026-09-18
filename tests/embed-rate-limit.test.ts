@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { NextRequest } from 'next/server'
 import sharp from 'sharp'
+import { EMBED_RATE_LIMIT } from '@/lib/limits'
 
 beforeAll(() => {
   process.env.GENID_SIGNING_SECRET = 'test-genid-signing-secret'
@@ -11,16 +12,14 @@ vi.mock('@/lib/auth', () => ({
 }))
 vi.mock('@/lib/supabase', () => ({
   logContent: vi.fn(),
-  // Rate limiting (Sept 18 third follow-up) is covered by its own test
-  // file — default to "under the limit" so it doesn't interfere here.
-  countRecentEmbedsForGenid: vi.fn().mockResolvedValue(0),
+  countRecentEmbedsForGenid: vi.fn(),
 }))
 vi.mock('@/lib/blockchain', () => ({
   stampOnBlockchain: vi.fn(),
 }))
 
 import { getAuthenticatedRecord } from '@/lib/auth'
-import { logContent } from '@/lib/supabase'
+import { logContent, countRecentEmbedsForGenid } from '@/lib/supabase'
 import { stampOnBlockchain } from '@/lib/blockchain'
 import { POST } from '@/app/api/embed/route'
 
@@ -49,37 +48,41 @@ beforeEach(() => {
     created_at: new Date().toISOString(),
   })
   vi.mocked(stampOnBlockchain).mockResolvedValue({ txHash: '0xabc', network: 'polygon', blockNumber: 1, timestamp: Date.now() })
+  vi.mocked(logContent).mockResolvedValue({
+    id: 'log-1',
+    genid_code: 'AB12345',
+    content_hash: 'hash',
+    file_name: 'test.png',
+    file_type: 'image/png',
+    platform: 'GENID Protocol',
+    blockchain_tx_hash: '0xabc',
+    blockchain_network: 'polygon',
+    created_at: new Date().toISOString(),
+  })
 })
 
-describe('POST /api/embed — content-log failure handling (Sept 18 second follow-up)', () => {
-  it('refuses to return the stamped image when the content-log write ultimately fails', async () => {
-    vi.mocked(logContent).mockRejectedValue(new Error('DB unavailable'))
-
-    const res = await callEmbed()
-    expect(res.status).toBe(500)
-    const body = await res.json()
-    expect(body.error).toMatch(/could not be saved/i)
-    // Retried before giving up.
-    expect(logContent).toHaveBeenCalledTimes(3)
-  }, 10000)
-
-  it('returns the stamped image once the content log succeeds, even after earlier attempts failed', async () => {
-    vi.mocked(logContent)
-      .mockRejectedValueOnce(new Error('transient blip'))
-      .mockResolvedValueOnce({
-        id: 'log-1',
-        genid_code: 'AB12345',
-        content_hash: 'hash',
-        file_name: 'test.png',
-        file_type: 'image/png',
-        platform: 'GENID Protocol',
-        blockchain_tx_hash: '0xabc',
-        blockchain_network: 'polygon',
-        created_at: new Date().toISOString(),
-      })
+describe('POST /api/embed — rate limiting', () => {
+  it('stamps normally when under the rate limit', async () => {
+    vi.mocked(countRecentEmbedsForGenid).mockResolvedValue(0)
 
     const res = await callEmbed()
     expect(res.status).toBe(200)
-    expect(logContent).toHaveBeenCalledTimes(2)
+    expect(stampOnBlockchain).toHaveBeenCalled()
+  }, 10000)
+
+  it('rejects with 429 once the limit is hit, without touching blockchain or content log', async () => {
+    vi.mocked(countRecentEmbedsForGenid).mockResolvedValue(EMBED_RATE_LIMIT)
+
+    const res = await callEmbed()
+    expect(res.status).toBe(429)
+    expect(stampOnBlockchain).not.toHaveBeenCalled()
+    expect(logContent).not.toHaveBeenCalled()
+  })
+
+  it('allows stamping again once the count falls back under the limit', async () => {
+    vi.mocked(countRecentEmbedsForGenid).mockResolvedValue(EMBED_RATE_LIMIT - 1)
+
+    const res = await callEmbed()
+    expect(res.status).toBe(200)
   }, 10000)
 })

@@ -2,12 +2,33 @@ import { NextRequest, NextResponse } from 'next/server'
 import { extractGenid, hashBuffer, verifyNotarySignature } from '@/lib/steganography'
 import { lookupGenid, supabaseAdmin } from '@/lib/supabase'
 import { env } from '@/lib/env'
-import { validateUploadSize, validateImageDimensions, ValidationError } from '@/lib/limits'
+import {
+  validateUploadSize,
+  validateImageDimensions,
+  ValidationError,
+  checkInMemoryRateLimit,
+  getClientIp,
+  VERIFY_RATE_LIMIT,
+  VERIFY_RATE_WINDOW_MS,
+} from '@/lib/limits'
 
 // POST multipart/form-data: { image }
 // Returns: creator info if GENID found, plus signature verification status.
+// Public and unauthenticated by design (Build Spec 5.3 — anyone can verify
+// a file with no GenID account), so there's no identity to key a DB-backed
+// limit on the way the authenticated routes do — this uses the caller's IP
+// instead, in-process (see checkInMemoryRateLimit in lib/limits.ts for the
+// tradeoffs that come with that).
 export async function POST(req: NextRequest) {
   try {
+    const clientIp = getClientIp(req)
+    if (!checkInMemoryRateLimit(`verify:${clientIp}`, VERIFY_RATE_LIMIT, VERIFY_RATE_WINDOW_MS)) {
+      return NextResponse.json(
+        { error: 'Too many verification requests. Please wait a few minutes and try again.' },
+        { status: 429 }
+      )
+    }
+
     const formData = await req.formData()
     const imageFile = formData.get('image') as File
 

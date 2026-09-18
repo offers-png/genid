@@ -59,6 +59,38 @@ export async function deleteFromSessionBucket(path: string): Promise<void> {
   if (error) throw new Error(`Storage delete failed: ${error.message}`)
 }
 
+// Durable record of a storage path no longer referenced by any DB row, for
+// scripts/sweep-orphaned-storage.mjs (or any future cleanup job) to find
+// and remove later (Sept 18 fourth follow-up, "Fix orphaned storage
+// cleanup"). A plain console.error isn't enough on its own — production
+// logs aren't reliably retained or queryable, so a path logged only there
+// is effectively lost. The insert itself is best-effort: if even that
+// fails, this still falls back to console.error as the last resort.
+export async function recordOrphanedStoragePath(
+  path: string,
+  reason: string,
+  sessionId: string | null = null
+): Promise<void> {
+  const { error } = await getAdmin()
+    .from('genid_orphaned_storage_log')
+    .insert({ storage_path: path, reason, session_id: sessionId })
+
+  if (error) {
+    console.error(`Failed to record orphaned storage path ${path} (reason: ${reason}):`, error.message)
+  }
+}
+
+// Deletes a path known to no longer be referenced by any DB row; if the
+// delete itself fails, records it instead of silently leaving it behind.
+export async function cleanupOrphanedPath(path: string, reason: string, sessionId: string | null = null): Promise<void> {
+  try {
+    await deleteFromSessionBucket(path)
+  } catch (err) {
+    console.error(`Failed to delete orphaned storage path ${path} (reason: ${reason}), logging for later sweep:`, err)
+    await recordOrphanedStoragePath(path, reason, sessionId)
+  }
+}
+
 // Sums the size of every object stored under a session's prefix (step
 // outputs, the certificate PDF, the C2PA export) — the basic per-session
 // storage-cost visibility called for in Build Spec Section 7.1.4.

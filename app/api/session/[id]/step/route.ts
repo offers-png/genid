@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession, getSessionSteps, createStepIfActive, isSessionNotActiveError, countRecentGenerationsForGenid } from '@/lib/supabase'
 import { getAuthenticatedRecord } from '@/lib/auth'
-import { uploadToSessionBucket, downloadFromSessionBucket, stepStoragePath } from '@/lib/storage'
+import { uploadToSessionBucket, downloadFromSessionBucket, stepStoragePath, cleanupOrphanedPath } from '@/lib/storage'
 import { hashBuffer } from '@/lib/steganography'
 import { buildStepContent, computeStepHash, signStepHash } from '@/lib/chain'
 import { openAiImageAdapter } from '@/lib/adapters/openai-image'
@@ -183,6 +183,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         is_final_selection: false,
       })
     } catch (err: unknown) {
+      // The upload above already landed at storagePath — this insert is
+      // what would have made it reachable via a step row, so any failure
+      // here (not just SESSION_NOT_ACTIVE) leaves that file orphaned.
+      // Clean it up now rather than letting it sit unreferenced forever.
+      await cleanupOrphanedPath(
+        storagePath,
+        isSessionNotActiveError(err) ? 'step insert rejected: session no longer active' : 'step insert failed',
+        sessionId
+      )
       if (isSessionNotActiveError(err)) {
         return NextResponse.json(
           { error: 'This session started finalizing while this request was in progress — the new output was discarded.' },

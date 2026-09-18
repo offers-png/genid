@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 // Note: stampedBuffer response uses native Response (not NextResponse) for binary compatibility
 import { embedGenid, hashBuffer, generateNotarySignature } from '@/lib/steganography'
-import { logContent } from '@/lib/supabase'
+import { logContent, countRecentEmbedsForGenid } from '@/lib/supabase'
 import { getAuthenticatedRecord } from '@/lib/auth'
 import { stampOnBlockchain } from '@/lib/blockchain'
 import { env } from '@/lib/env'
-import { validateUploadSize, validateImageDimensions, ValidationError, withTimeout, EXTERNAL_CALL_TIMEOUT_MS } from '@/lib/limits'
+import {
+  validateUploadSize,
+  validateImageDimensions,
+  ValidationError,
+  withTimeout,
+  EXTERNAL_CALL_TIMEOUT_MS,
+  EMBED_RATE_LIMIT,
+  EMBED_RATE_WINDOW_MS,
+} from '@/lib/limits'
 
 // POST multipart/form-data: { image }
 // Returns: the steganographically-stamped image with embedded notary signature.
@@ -28,6 +36,14 @@ export async function POST(req: NextRequest) {
     }
     if (!record.verified) {
       return NextResponse.json({ error: 'Your identity has not been verified yet.' }, { status: 403 })
+    }
+
+    const recentEmbeds = await countRecentEmbedsForGenid(record.genid_code, EMBED_RATE_WINDOW_MS)
+    if (recentEmbeds >= EMBED_RATE_LIMIT) {
+      return NextResponse.json(
+        { error: 'Too many stamping requests. Please wait a few minutes and try again.' },
+        { status: 429 }
+      )
     }
 
     const imageBuffer = Buffer.from(await imageFile.arrayBuffer())
