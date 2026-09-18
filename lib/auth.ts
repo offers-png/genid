@@ -126,6 +126,27 @@ export async function createMagicLinkToken(email: string): Promise<string> {
   return token
 }
 
+// Rate limiting for magic-link requests (lib/limits.ts) — without this,
+// nothing stops repeatedly requesting a link for the same (registered)
+// email: an email-bombing vector against that person, and a way to burn
+// through the Resend send quota. Counts rows already written by
+// createMagicLinkToken for this email in the window, the same
+// count-then-compare pattern as countRecentGenerationsForGenid.
+export async function countRecentMagicLinkRequestsForEmail(email: string, sinceMs: number): Promise<number> {
+  const since = new Date(Date.now() - sinceMs).toISOString()
+  const { count, error } = await getAdmin()
+    .from('genid_magic_link_tokens')
+    .select('id', { count: 'exact', head: true })
+    .eq('email', email)
+    .gte('created_at', since)
+
+  if (error) {
+    console.error('Failed to count recent magic link requests (failing open):', error.message)
+    return 0
+  }
+  return count ?? 0
+}
+
 // Single-use: the update-with-WHERE-used_at-is-null is the atomic claim, so
 // two simultaneous redemptions of the same link can't both succeed.
 export async function consumeMagicLinkToken(token: string): Promise<string | null> {

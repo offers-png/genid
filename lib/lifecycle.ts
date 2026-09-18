@@ -1,6 +1,6 @@
 import sharp from 'sharp'
 import { getSession, getSessionSteps, markStepArchived } from './supabase'
-import { downloadFromSessionBucket, uploadToSessionBucket, deleteFromSessionBucket, archiveStepStoragePath } from './storage'
+import { downloadFromSessionBucket, uploadToSessionBucket, deleteFromSessionBucket, archiveStepStoragePath, recordOrphanedStoragePath } from './storage'
 import { hashBuffer } from './steganography'
 import { signStepHash, buildArchiveContent } from './chain'
 import { env } from './env'
@@ -91,6 +91,7 @@ export async function archiveNonFinalSteps(sessionId: string): Promise<ArchiveRe
       await deleteFromSessionBucket(originalPath)
     } catch (deleteErr) {
       console.error(`Failed to delete original file after archiving step ${step.id} (non-fatal, leftover storage):`, deleteErr)
+      await recordOrphanedStoragePath(originalPath, `archive delete failed for step ${step.id}`, sessionId)
     }
 
     result.bytesBefore += original.length

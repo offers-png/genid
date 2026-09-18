@@ -186,6 +186,10 @@ vi.mock('@/lib/storage', () => ({
   deleteFromSessionBucket: vi.fn(async (path: string) => {
     storageFiles.delete(path)
   }),
+  cleanupOrphanedPath: vi.fn(async (path: string) => {
+    storageFiles.delete(path)
+  }),
+  recordOrphanedStoragePath: vi.fn(),
 }))
 
 let lastAnchorPayload = ''

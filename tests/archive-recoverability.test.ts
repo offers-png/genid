@@ -21,11 +21,12 @@ vi.mock('@/lib/storage', () => ({
   downloadFromSessionBucket: vi.fn(),
   uploadToSessionBucket: vi.fn(),
   deleteFromSessionBucket: vi.fn(),
+  recordOrphanedStoragePath: vi.fn(),
   archiveStepStoragePath: (sessionId: string, stepNumber: number) => `${sessionId}/step_${stepNumber}_archive.png`,
 }))
 
 import { getSession, getSessionSteps, markStepArchived, type SessionRecord, type StepRecord } from '@/lib/supabase'
-import { downloadFromSessionBucket, uploadToSessionBucket, deleteFromSessionBucket } from '@/lib/storage'
+import { downloadFromSessionBucket, uploadToSessionBucket, deleteFromSessionBucket, recordOrphanedStoragePath } from '@/lib/storage'
 import { archiveNonFinalSteps } from '@/lib/lifecycle'
 
 const SESSION_ID = 'session-1'
@@ -119,7 +120,7 @@ describe('archiveNonFinalSteps — recoverability (Sept 18 second follow-up)', (
     expect(deleteFromSessionBucket).not.toHaveBeenCalled()
   })
 
-  it('does not fail the whole batch if deleting the (now-unreferenced) original fails', async () => {
+  it('does not fail the whole batch if deleting the (now-unreferenced) original fails, and logs it for later sweep', async () => {
     vi.mocked(getSessionSteps).mockResolvedValue([fakeNonFinalStep()])
     vi.mocked(markStepArchived).mockResolvedValue(undefined)
     vi.mocked(deleteFromSessionBucket).mockRejectedValue(new Error('storage hiccup'))
@@ -130,6 +131,13 @@ describe('archiveNonFinalSteps — recoverability (Sept 18 second follow-up)', (
     // file, not a correctness problem, so this must not throw.
     expect(result.archivedCount).toBe(1)
     expect(markStepArchived).toHaveBeenCalled()
+    // Sept 18 fourth follow-up: a failed delete must not just vanish into a
+    // console log — it needs to be durably recorded so it can be swept later.
+    expect(recordOrphanedStoragePath).toHaveBeenCalledWith(
+      `${SESSION_ID}/step_1.png`,
+      expect.stringContaining('step-1'),
+      SESSION_ID
+    )
   })
 
   it('skips the final/selected step, already-archived steps, and steps with no stored output', async () => {

@@ -21,6 +21,13 @@ vi.mock('@/lib/limits', () => ({
   validateUploadSize: vi.fn(),
   validateImageDimensions: vi.fn(),
   ValidationError: class ValidationError extends Error {},
+  // Rate limiting (Sept 18 third follow-up) is covered by its own test
+  // file — stub it out here so it doesn't interfere with the
+  // content-binding assertions this suite actually cares about.
+  checkInMemoryRateLimit: vi.fn(() => true),
+  getClientIp: vi.fn(() => '127.0.0.1'),
+  VERIFY_RATE_LIMIT: 20,
+  VERIFY_RATE_WINDOW_MS: 5 * 60 * 1000,
 }))
 
 import { extractGenid, hashBuffer, verifyNotarySignature } from '@/lib/steganography'
