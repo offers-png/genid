@@ -19,6 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span className="text-xs text-violet-400 border border-violet-800 rounded px-1.5 py-0.5 ml-1">Patent Pending</span>
             </Link>
             <div className="flex items-center gap-6 text-sm text-gray-400">
+              <Link href="/session" className="hover:text-white transition-colors">Create Session</Link>
               <Link href="/verify" className="hover:text-white transition-colors">Verify</Link>
               <Link href="/embed" className="hover:text-white transition-colors">Stamp</Link>
               <Link href="/dashboard" className="hover:text-white transition-colors">Dashboard</Link>
