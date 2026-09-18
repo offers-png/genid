@@ -7,12 +7,14 @@ export default function Home() {
           Patent Pending — Priority Date April 27, 2026
         </div>
         <h1 className="text-5xl font-bold tracking-tight text-white mb-6 leading-tight">
-          Every AI-Generated Image<br />
-          <span className="text-violet-400">Carries Its Creator&apos;s Identity</span>
+          Every Stamped Image<br />
+          <span className="text-violet-400">Carries a Verified Submitter&apos;s Identity</span>
         </h1>
         <p className="text-xl text-gray-300 max-w-2xl mx-auto mb-10">
-          GENID Protocol cryptographically embeds a verified human identity into AI-generated content
-          at the moment of creation — invisible to the eye, signed, and independently verifiable by anyone.
+          GENID Protocol cryptographically binds a verified human identity to content the moment it&apos;s
+          stamped — invisible to the eye, signed, and independently verifiable by anyone. It proves who
+          submitted the file through GenID, not who created the underlying content or whether it was
+          AI-generated.
         </p>
         <div className="flex items-center justify-center gap-4">
           <a href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium text-lg transition-colors shadow-lg">
