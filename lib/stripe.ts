@@ -36,7 +36,12 @@ export async function createIdentityVerificationSession(params: {
 }
 
 export async function retrieveVerificationSession(sessionId: string) {
-  return await getStripe().identity.verificationSessions.retrieve(sessionId)
+  // verified_outputs isn't included by default — must be explicitly expanded,
+  // or verified_outputs comes back undefined and the webhook has nothing to
+  // reconcile the stored name against.
+  return await getStripe().identity.verificationSessions.retrieve(sessionId, {
+    expand: ['verified_outputs'],
+  })
 }
 
 export function constructWebhookEvent(payload: Buffer, signature: string) {

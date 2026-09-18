@@ -22,11 +22,14 @@ import { env } from './env'
 //    precedes it, not just trusted at face value.
 //
 // A step whose output_archived flag is set (lib/lifecycle.ts, Build Spec
-// Section 7) is EXPECTED to fail fileHashValid — its stored file was
-// deliberately replaced with a compressed archival copy after finalize, so
-// re-hashing it can never match the original output_hash again. That's not
-// tampering, so it doesn't fail the step; signatureValid and chainLinkValid
-// still have to hold, since those don't depend on the file surviving.
+// Section 7) has had its ORIGINAL file replaced with a compressed archival
+// copy after finalize, so re-hashing it can never match output_hash again
+// — that's expected, not tampering. But that doesn't mean the archived
+// step's file integrity goes unchecked: archiveIntegrityValid checks the
+// CURRENT file against archive_hash (recorded at archive time over the
+// compressed bytes) and archive_hash against archive_signature, so an
+// archived step's stored file still has to match something specific —
+// just not output_hash.
 
 export interface StepVerification {
   stepId: string
@@ -34,6 +37,7 @@ export interface StepVerification {
   stepType: string
   fileHashValid: boolean
   fileArchived: boolean
+  archiveIntegrityValid: boolean | null
   signatureValid: boolean
   chainLinkValid: boolean
   valid: boolean
@@ -82,7 +86,36 @@ export async function verifySession(sessionId: string): Promise<SessionVerificat
 
   for (const step of steps) {
     let fileHashValid = false
-    if (step.output_storage_path && step.output_hash) {
+    let archiveIntegrityValid: boolean | null = null
+
+    if (step.output_archived) {
+      if (!step.archive_hash || !step.archive_signature) {
+        // Archived before archive_hash/archive_signature existed (this
+        // step predates that migration) — there's nothing recorded to
+        // check the current file against. Left null (not failed): the
+        // same "skip the file check" behavior this had before archive
+        // integrity tracking existed, not a false tamper report on data
+        // that was never wrong in the first place.
+        archiveIntegrityValid = null
+      } else {
+        // The original bytes are gone by design — check the CURRENT
+        // (compressed) file against the hash recorded at archive time,
+        // and that hash against its own signature, instead of skipping
+        // the file check entirely.
+        const archiveSignatureValid = signStepHash(step.archive_hash, signingSecret) === step.archive_signature
+
+        if (archiveSignatureValid && step.output_storage_path) {
+          try {
+            const buffer = await downloadFromSessionBucket(step.output_storage_path)
+            archiveIntegrityValid = hashBuffer(buffer) === step.archive_hash
+          } catch {
+            archiveIntegrityValid = false
+          }
+        } else {
+          archiveIntegrityValid = false
+        }
+      }
+    } else if (step.output_storage_path && step.output_hash) {
       try {
         const buffer = await downloadFromSessionBucket(step.output_storage_path)
         fileHashValid = hashBuffer(buffer) === step.output_hash
@@ -112,9 +145,11 @@ export async function verifySession(sessionId: string): Promise<SessionVerificat
       stepType: step.step_type,
       fileHashValid,
       fileArchived: step.output_archived,
+      archiveIntegrityValid,
       signatureValid,
       chainLinkValid,
-      valid: (fileHashValid || step.output_archived) && signatureValid && chainLinkValid,
+      valid:
+        (step.output_archived ? archiveIntegrityValid !== false : fileHashValid) && signatureValid && chainLinkValid,
     })
 
     signaturesInOrder.push(step.step_signature ?? '')

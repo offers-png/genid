@@ -31,6 +31,7 @@ export async function POST(req: NextRequest) {
       const { error: insertError } = await supabaseAdmin.from('genid_registry').insert({
         genid_code: genidCode,
         user_name: fullName,
+        self_reported_name: fullName,
         email,
         verified: false,
         verification_status: 'pending',

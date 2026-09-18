@@ -65,8 +65,19 @@ export async function POST(req: NextRequest) {
       logEntry?.created_at ??
       (extracted.timestamp ? new Date(extracted.timestamp * 1000).toISOString() : null)
 
+    // A GENID code being registered proves nothing about THIS image — only
+    // a valid notary signature over the embedded hash does. Without that
+    // check, a tampered or unsigned image carrying someone else's code
+    // would come back "verified" just because the code exists.
+    const verified = signaturePresent && signatureValid
+    const message = verified
+      ? `Verified AI content created by ${record.user_name} (${record.genid_code})`
+      : signaturePresent
+        ? 'GENID code found and registered, but the embedded signature does not match this image. This content may have been tampered with.'
+        : 'GENID code found and registered, but this image has no embedded notary signature to verify. Authenticity cannot be confirmed.'
+
     return NextResponse.json({
-      verified: true,
+      verified,
       genidCode: record.genid_code,
       creatorName: record.user_name,
       identityVerified: record.verified,
@@ -78,7 +89,7 @@ export async function POST(req: NextRequest) {
       signaturePresent,
       signatureValid,
       embeddedHash: extracted.hash ?? null,
-      message: `Verified AI content created by ${record.user_name} (${record.genid_code})`,
+      message,
     })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Verification failed'

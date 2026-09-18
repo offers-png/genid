@@ -16,6 +16,7 @@ export interface GenidRecord {
   id: string
   genid_code: string
   user_name: string
+  self_reported_name?: string | null
   email: string
   stripe_verification_id: string | null
   verified: boolean
@@ -89,7 +90,7 @@ export interface SessionRecord {
   id: string
   genid_code: string
   content_type: string
-  status: 'active' | 'finalized' | 'abandoned'
+  status: 'active' | 'finalizing' | 'finalized' | 'abandoned'
   final_step_id: string | null
   session_root_hash: string | null
   polygon_anchor_tx: string | null
@@ -119,6 +120,8 @@ export interface StepRecord {
   auto_suggested_note: string | null
   is_final_selection: boolean
   output_archived: boolean
+  archive_hash: string | null
+  archive_signature: string | null
   created_at: string
 }
 
@@ -158,6 +161,37 @@ export async function getSession(sessionId: string): Promise<SessionRecord | nul
   return data as SessionRecord
 }
 
+// Atomically claims a session for finalizing — an UPDATE ... WHERE
+// status = 'active' either affects exactly one row (we won the race) or
+// zero (someone else already claimed it, or it's in some other state), so
+// two concurrent finalize calls can't both proceed through generation,
+// upload, and anchoring for the same session.
+export async function tryBeginFinalizing(sessionId: string): Promise<boolean> {
+  const { data, error } = await getAdmin()
+    .from('genid_sessions')
+    .update({ status: 'finalizing' })
+    .eq('id', sessionId)
+    .eq('status', 'active')
+    .select('id')
+
+  if (error) throw new Error(`Failed to begin finalize: ${error.message}`)
+  return (data?.length ?? 0) > 0
+}
+
+// Releases a finalize lock this same request acquired, so a failure partway
+// through (e.g. PDF generation throws) leaves the session retriable instead
+// of stuck in 'finalizing' forever. Scoped to WHERE status = 'finalizing' so
+// it can never clobber a session that some other path already moved on from.
+export async function abortFinalizing(sessionId: string): Promise<void> {
+  const { error } = await getAdmin()
+    .from('genid_sessions')
+    .update({ status: 'active' })
+    .eq('id', sessionId)
+    .eq('status', 'finalizing')
+
+  if (error) throw new Error(`Failed to release finalize lock: ${error.message}`)
+}
+
 export async function finalizeSession(
   sessionId: string,
   finalStepId: string,
@@ -178,7 +212,9 @@ export async function finalizeSession(
   if (error) throw new Error(`Failed to finalize session: ${error.message}`)
 }
 
-export async function createStep(entry: Omit<StepRecord, 'id' | 'created_at' | 'output_archived'>): Promise<StepRecord> {
+export async function createStep(
+  entry: Omit<StepRecord, 'id' | 'created_at' | 'output_archived' | 'archive_hash' | 'archive_signature'>
+): Promise<StepRecord> {
   const { data, error } = await getAdmin().from('genid_steps').insert(entry).select().single()
   if (error || !data) throw new Error(`Failed to create step: ${error?.message}`)
   return data as StepRecord
@@ -211,8 +247,11 @@ export async function markStepFinal(stepId: string, sessionId: string): Promise<
   if (error) throw new Error(`Failed to mark step final: ${error.message}`)
 }
 
-export async function markStepArchived(stepId: string): Promise<void> {
-  const { error } = await getAdmin().from('genid_steps').update({ output_archived: true }).eq('id', stepId)
+export async function markStepArchived(stepId: string, archiveHash: string, archiveSignature: string): Promise<void> {
+  const { error } = await getAdmin()
+    .from('genid_steps')
+    .update({ output_archived: true, archive_hash: archiveHash, archive_signature: archiveSignature })
+    .eq('id', stepId)
   if (error) throw new Error(`Failed to mark step archived: ${error.message}`)
 }
 
@@ -225,7 +264,18 @@ export async function createCertificate(
   entry: Omit<CertificateRecord, 'id' | 'generated_at'>
 ): Promise<CertificateRecord> {
   const { data, error } = await getAdmin().from('genid_certificates').insert(entry).select().single()
-  if (error || !data) throw new Error(`Failed to create certificate: ${error?.message}`)
+  if (error) {
+    // Unique constraint on session_id — a concurrent request already
+    // created the certificate first. Return that one instead of failing;
+    // the finalize lock makes this vanishingly rare, but the constraint
+    // (and this fallback) is the actual guarantee against duplicates.
+    if (error.code === '23505') {
+      const existing = await getCertificateForSession(entry.session_id)
+      if (existing) return existing
+    }
+    throw new Error(`Failed to create certificate: ${error.message}`)
+  }
+  if (!data) throw new Error('Failed to create certificate: no data returned')
   return data as CertificateRecord
 }
 
