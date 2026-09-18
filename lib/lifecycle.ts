@@ -1,6 +1,6 @@
 import sharp from 'sharp'
 import { getSession, getSessionSteps, markStepArchived } from './supabase'
-import { downloadFromSessionBucket, uploadToSessionBucket } from './storage'
+import { downloadFromSessionBucket, uploadToSessionBucket, deleteFromSessionBucket, archiveStepStoragePath } from './storage'
 import { hashBuffer } from './steganography'
 import { signStepHash, buildArchiveContent } from './chain'
 import { env } from './env'
@@ -20,6 +20,17 @@ import { env } from './env'
 // bytes) are what lib/verify.ts checks an archived step's CURRENT file
 // against, so a step being archived doesn't mean its stored file can be
 // swapped for anything post-archival and still read as verified.
+//
+// RECOVERABILITY: the compressed copy is uploaded to its OWN path (never
+// overwriting the original in place), hashed from the exact bytes just
+// uploaded, and only THEN is the DB updated — atomically flipping
+// output_archived/archive_hash/archive_signature/output_storage_path
+// together in one write (markStepArchived). Only after that write commits
+// is the original file deleted, best-effort. A crash at any point before
+// the DB write leaves the original step completely unchanged and safely
+// retriable (nothing has been overwritten yet); a crash after leaves a
+// harmless leftover original file for a later cleanup pass, never a
+// mismatch between what the DB claims and what's actually stored.
 //
 // Compression choice: resize to a max 512px edge and re-encode as an
 // adaptive-palette PNG. These are rejected/superseded drafts a user chose
@@ -49,7 +60,8 @@ export async function archiveNonFinalSteps(sessionId: string): Promise<ArchiveRe
       continue
     }
 
-    const original = await downloadFromSessionBucket(step.output_storage_path)
+    const originalPath = step.output_storage_path
+    const original = await downloadFromSessionBucket(originalPath)
     const compressed = await sharp(original)
       .resize({
         width: ARCHIVE_MAX_DIMENSION,
@@ -60,12 +72,26 @@ export async function archiveNonFinalSteps(sessionId: string): Promise<ArchiveRe
       .png({ compressionLevel: 9, palette: true })
       .toBuffer()
 
-    await uploadToSessionBucket(step.output_storage_path, compressed, 'image/png', { upsert: true })
+    // Upload to a NEW path first — the original at originalPath is not
+    // touched yet, so failure anywhere up to and including this line
+    // leaves the step exactly as it was before this loop iteration.
+    const archivePath = archiveStepStoragePath(sessionId, step.step_number)
+    await uploadToSessionBucket(archivePath, compressed, 'image/png', { upsert: true })
 
     const archiveHash = hashBuffer(compressed)
     const archiveContent = buildArchiveContent(sessionId, step.id, step.output_hash ?? '', archiveHash)
     const archiveSignature = signStepHash(archiveContent, env.genidSigningSecret)
-    await markStepArchived(step.id, archiveHash, archiveSignature)
+    // This is the durable commit point: output_storage_path now points at
+    // the compressed file, alongside the hash/signature that prove it.
+    await markStepArchived(step.id, archiveHash, archiveSignature, archivePath)
+
+    // Only now remove the original — the DB no longer references it, so a
+    // failure here just wastes storage rather than losing anything.
+    try {
+      await deleteFromSessionBucket(originalPath)
+    } catch (deleteErr) {
+      console.error(`Failed to delete original file after archiving step ${step.id} (non-fatal, leftover storage):`, deleteErr)
+    }
 
     result.bytesBefore += original.length
     result.bytesAfter += compressed.length

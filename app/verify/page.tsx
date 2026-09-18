@@ -93,7 +93,7 @@ export default function VerifyPage() {
       <div className="mb-10">
         <h1 className="text-3xl font-bold text-white mb-2">Verify an Image</h1>
         <p className="text-gray-400">
-          Upload any image to check whether it carries a GENID. If it does, you&apos;ll see who created it, when, and the blockchain proof.
+          Upload any image to check whether it carries a GENID. If it does, you&apos;ll see who stamped it and when — this confirms who submitted the file through GenID under an ID-verified identity, not who created the underlying image or whether it was AI-generated.
         </p>
       </div>
 

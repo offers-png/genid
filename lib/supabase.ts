@@ -163,21 +163,34 @@ export async function getSession(sessionId: string): Promise<SessionRecord | nul
   return data as SessionRecord
 }
 
+export interface FinalizeLock {
+  acquired: boolean
+  token: string | null
+}
+
 // Atomically claims a session for finalizing — an UPDATE ... WHERE
 // status = 'active' either affects exactly one row (we won the race) or
 // zero (someone else already claimed it, or it's in some other state), so
 // two concurrent finalize calls can't both proceed through generation,
 // upload, and anchoring for the same session.
-export async function tryBeginFinalizing(sessionId: string): Promise<boolean> {
+//
+// Returns a fresh ownership token with the lock. Every later write this
+// request makes against the lock (abortFinalizing, finalizeSession) must
+// present this same token — see finalizing_lock_token (migration 010) for
+// why: without an owner, a request that merely ran long (not actually
+// dead) could clobber a DIFFERENT request's lock after
+// tryReclaimStaleFinalizing gave it away.
+export async function tryBeginFinalizing(sessionId: string): Promise<FinalizeLock> {
+  const token = crypto.randomUUID()
   const { data, error } = await getAdmin()
     .from('genid_sessions')
-    .update({ status: 'finalizing', finalizing_since: new Date().toISOString() })
+    .update({ status: 'finalizing', finalizing_since: new Date().toISOString(), finalizing_lock_token: token })
     .eq('id', sessionId)
     .eq('status', 'active')
     .select('id')
 
   if (error) throw new Error(`Failed to begin finalize: ${error.message}`)
-  return (data?.length ?? 0) > 0
+  return (data?.length ?? 0) > 0 ? { acquired: true, token } : { acquired: false, token: null }
 }
 
 // Reclaims a 'finalizing' lock that's been held longer than staleAfterMs —
@@ -187,42 +200,84 @@ export async function tryBeginFinalizing(sessionId: string): Promise<boolean> {
 // path. Same atomic claim pattern as tryBeginFinalizing: the WHERE clause
 // (status = 'finalizing' AND finalizing_since older than the cutoff) means
 // only a genuinely stale lock can be reclaimed, and only one caller wins if
-// several try at once.
-export async function tryReclaimStaleFinalizing(sessionId: string, staleAfterMs: number): Promise<boolean> {
+// several try at once. Issues a NEW token, invalidating whatever the
+// previous (presumed-dead) holder had — if that holder turns out to still
+// be alive, its subsequent abortFinalizing/finalizeSession calls present
+// the old token and are correctly rejected as no-ops instead of disturbing
+// the new holder's work.
+export async function tryReclaimStaleFinalizing(sessionId: string, staleAfterMs: number): Promise<FinalizeLock> {
   const cutoff = new Date(Date.now() - staleAfterMs).toISOString()
+  const token = crypto.randomUUID()
   const { data, error } = await getAdmin()
     .from('genid_sessions')
-    .update({ status: 'finalizing', finalizing_since: new Date().toISOString() })
+    .update({ status: 'finalizing', finalizing_since: new Date().toISOString(), finalizing_lock_token: token })
     .eq('id', sessionId)
     .eq('status', 'finalizing')
     .lt('finalizing_since', cutoff)
     .select('id')
 
   if (error) throw new Error(`Failed to reclaim stale finalize lock: ${error.message}`)
-  return (data?.length ?? 0) > 0
+  return (data?.length ?? 0) > 0 ? { acquired: true, token } : { acquired: false, token: null }
 }
 
 // Releases a finalize lock this same request acquired, so a failure partway
 // through (e.g. PDF generation throws) leaves the session retriable instead
-// of stuck in 'finalizing' forever. Scoped to WHERE status = 'finalizing' so
-// it can never clobber a session that some other path already moved on from.
-export async function abortFinalizing(sessionId: string): Promise<void> {
+// of stuck in 'finalizing' forever. Scoped to WHERE status = 'finalizing'
+// AND finalizing_lock_token = token, so this can never clobber a session
+// some other path already moved on from OR a lock a different request has
+// since taken over (a stale reclaim would have issued a different token).
+export async function abortFinalizing(sessionId: string, token: string): Promise<void> {
   const { error } = await getAdmin()
     .from('genid_sessions')
-    .update({ status: 'active', finalizing_since: null })
+    .update({ status: 'active', finalizing_since: null, finalizing_lock_token: null })
     .eq('id', sessionId)
     .eq('status', 'finalizing')
+    .eq('finalizing_lock_token', token)
 
   if (error) throw new Error(`Failed to release finalize lock: ${error.message}`)
 }
 
+// Persists a successful Polygon anchor IMMEDIATELY (rather than waiting for
+// the final finalizeSession() commit, which can be minutes later once C2PA
+// embedding and PDF generation finish) so a retry — even one that reclaimed
+// this request's lock after a crash — sees polygon_anchor_tx already set on
+// its next getSession() read and skips submitting a second on-chain
+// transaction for the same root hash. Token-scoped: if the lock has since
+// been reclaimed, this write is dropped (0 rows), which is correct — the
+// new holder does its own anchor and will persist its own tx.
+//
+// Also refreshes finalizing_since as a heartbeat: a finalize call that's
+// genuinely still progressing (not stuck) shouldn't have its lock stolen by
+// tryReclaimStaleFinalizing just because the remaining work (PDF/C2PA) is
+// taking a while — a real anchor transaction landing is solid evidence the
+// process is alive.
+export async function recordPolygonAnchorTx(sessionId: string, token: string, txHash: string): Promise<boolean> {
+  const { data, error } = await getAdmin()
+    .from('genid_sessions')
+    .update({ polygon_anchor_tx: txHash, finalizing_since: new Date().toISOString() })
+    .eq('id', sessionId)
+    .eq('status', 'finalizing')
+    .eq('finalizing_lock_token', token)
+    .select('id')
+
+  if (error) throw new Error(`Failed to record Polygon anchor: ${error.message}`)
+  return (data?.length ?? 0) > 0
+}
+
+// Token-gated: this is the write that actually transitions the session out
+// of 'finalizing', so it's the one that MUST fail loudly if this request's
+// lock has been superseded — a caller that lost ownership must not go on to
+// mark a step final or generate a certificate as if it still held the lock.
+// Returns false (not a thrown error) when the token no longer matches, so
+// the route can react without treating it as an unexpected failure.
 export async function finalizeSession(
   sessionId: string,
   finalStepId: string,
   sessionRootHash: string,
-  polygonAnchorTx: string | null
-): Promise<void> {
-  const { error } = await getAdmin()
+  polygonAnchorTx: string | null,
+  token: string
+): Promise<boolean> {
+  const { data, error } = await getAdmin()
     .from('genid_sessions')
     .update({
       status: 'finalized',
@@ -230,18 +285,53 @@ export async function finalizeSession(
       finalized_at: new Date().toISOString(),
       session_root_hash: sessionRootHash,
       polygon_anchor_tx: polygonAnchorTx,
+      finalizing_lock_token: null,
     })
     .eq('id', sessionId)
+    .eq('status', 'finalizing')
+    .eq('finalizing_lock_token', token)
+    .select('id')
 
   if (error) throw new Error(`Failed to finalize session: ${error.message}`)
+  return (data?.length ?? 0) > 0
 }
 
-export async function createStep(
+// Inserts a step ONLY IF the session is still 'active' at insert time,
+// checked and written inside a single Postgres transaction (see
+// create_step_if_session_active, migration 010) — closes the race where a
+// slow generate/regenerate/edit call could still land its INSERT after
+// finalize had already read the step list and computed the root hash.
+// Throws a recognizable error (checked via isSessionNotActiveError) rather
+// than a generic one, so the route can return 409 instead of 500.
+export async function createStepIfActive(
   entry: Omit<StepRecord, 'id' | 'created_at' | 'output_archived' | 'archive_hash' | 'archive_signature'>
 ): Promise<StepRecord> {
-  const { data, error } = await getAdmin().from('genid_steps').insert(entry).select().single()
-  if (error || !data) throw new Error(`Failed to create step: ${error?.message}`)
+  const { data, error } = await getAdmin().rpc('create_step_if_session_active', {
+    p_session_id: entry.session_id,
+    p_step_number: entry.step_number,
+    p_step_type: entry.step_type,
+    p_edit_type: entry.edit_type,
+    p_prompt_text: entry.prompt_text,
+    p_model_used: entry.model_used,
+    p_model_request_id: entry.model_request_id,
+    p_request_timestamp: entry.request_timestamp,
+    p_response_timestamp: entry.response_timestamp,
+    p_output_storage_path: entry.output_storage_path,
+    p_output_hash: entry.output_hash,
+    p_prior_step_signature: entry.prior_step_signature,
+    p_step_hash: entry.step_hash,
+    p_step_signature: entry.step_signature,
+    p_user_note: entry.user_note,
+    p_auto_suggested_note: entry.auto_suggested_note,
+  })
+
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error('Failed to create step: no data returned')
   return data as StepRecord
+}
+
+export function isSessionNotActiveError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('SESSION_NOT_ACTIVE')
 }
 
 export async function getSessionSteps(sessionId: string): Promise<StepRecord[]> {
@@ -271,10 +361,28 @@ export async function markStepFinal(stepId: string, sessionId: string): Promise<
   if (error) throw new Error(`Failed to mark step final: ${error.message}`)
 }
 
-export async function markStepArchived(stepId: string, archiveHash: string, archiveSignature: string): Promise<void> {
+// newStoragePath points output_storage_path at the ALREADY-UPLOADED
+// compressed file — this write is what makes archival recoverable
+// (lib/lifecycle.ts): the compressed file is uploaded to its own new path
+// (the original is left untouched) and hashed BEFORE this call, so a crash
+// before this DB write leaves the original step exactly as it was
+// (output_archived still false, output_storage_path still the original —
+// safely retriable) rather than a file silently swapped out from under a
+// DB row that doesn't know about it yet.
+export async function markStepArchived(
+  stepId: string,
+  archiveHash: string,
+  archiveSignature: string,
+  newStoragePath: string
+): Promise<void> {
   const { error } = await getAdmin()
     .from('genid_steps')
-    .update({ output_archived: true, archive_hash: archiveHash, archive_signature: archiveSignature })
+    .update({
+      output_archived: true,
+      archive_hash: archiveHash,
+      archive_signature: archiveSignature,
+      output_storage_path: newStoragePath,
+    })
     .eq('id', stepId)
   if (error) throw new Error(`Failed to mark step archived: ${error.message}`)
 }
@@ -312,6 +420,28 @@ export async function getCertificateForSession(sessionId: string): Promise<Certi
 
   if (error || !data) return null
   return data as CertificateRecord
+}
+
+// Rate limiting for generation requests (lib/limits.ts) — counts steps of
+// type 'generate'/'regenerate' created for this identity in the given
+// window, across ALL of its sessions, via PostgREST's embedded-resource
+// filter (`genid_sessions!inner`) rather than fetching every step client
+// side. Every generate/regenerate step calls a paid external model API, so
+// this is what actually bounds spend per identity, not just per session.
+export async function countRecentGenerationsForGenid(genidCode: string, sinceMs: number): Promise<number> {
+  const since = new Date(Date.now() - sinceMs).toISOString()
+  const { count, error } = await getAdmin()
+    .from('genid_steps')
+    .select('id, genid_sessions!inner(genid_code)', { count: 'exact', head: true })
+    .eq('genid_sessions.genid_code', genidCode)
+    .in('step_type', ['generate', 'regenerate'])
+    .gte('created_at', since)
+
+  if (error) {
+    console.error('Failed to count recent generations (failing open):', error.message)
+    return 0
+  }
+  return count ?? 0
 }
 
 export async function listSessionsForGenid(genidCode: string): Promise<SessionRecord[]> {

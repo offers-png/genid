@@ -27,13 +27,17 @@ export default async function VerifySessionPage({ params }: { params: Promise<{ 
   const record = session ? await lookupGenid(session.genid_code) : null
 
   let c2pa: { validationState: string | null; validationStatus: unknown[] } | null = null
+  let c2paCheckUnavailable = false
   if (session?.c2pa_manifest_id) {
     try {
       const buffer = await downloadFromSessionBucket(c2paExportStoragePath(id))
       const read = await readC2paManifest(buffer)
       c2pa = { validationState: read.validationState, validationStatus: read.validationStatus }
     } catch {
-      c2pa = null
+      // A manifest WAS recorded for this session — this is "we couldn't
+      // read it right now" (storage/parsing issue), not "no manifest
+      // exists." Distinct claims; the page should say which one this is.
+      c2paCheckUnavailable = true
     }
   }
 
@@ -64,6 +68,13 @@ export default async function VerifySessionPage({ params }: { params: Promise<{ 
         <div className="bg-gray-800 rounded-lg p-4 mb-6">
           <div className="text-xs text-gray-500 mb-1 font-mono">CREATOR</div>
           <div className="text-white">{record.user_name} ({record.genid_code})</div>
+          <div className="text-xs text-gray-500 mt-1">
+            {record.name_verified
+              ? 'Name confirmed by ID document.'
+              : 'Name self-reported at registration, not confirmed by an ID document.'}
+            {' '}This shows who submitted this content through GenID — not necessarily who created the
+            underlying image or whether it was AI-generated.
+          </div>
         </div>
       )}
 
@@ -120,8 +131,29 @@ export default async function VerifySessionPage({ params }: { params: Promise<{ 
         <div className="bg-gray-800 rounded-lg p-4 mb-3">
           <div className="text-xs text-gray-500 mb-1 font-mono">POLYGON ANCHOR</div>
           <div className="font-mono text-xs text-gray-300 break-all mb-2">{result.polygonAnchorTx}</div>
-          <div className={`text-xs ${result.polygonConfirmed ? 'text-green-400' : 'text-red-400'}`}>
-            {result.polygonConfirmed ? 'Confirmed on-chain' : 'Could not confirm on-chain'}
+          <div
+            className={`text-xs ${
+              result.polygonStatus === 'confirmed'
+                ? 'text-green-400'
+                : result.polygonStatus === 'unavailable'
+                  ? 'text-yellow-400'
+                  : 'text-red-400'
+            }`}
+          >
+            {result.polygonStatus === 'confirmed' && 'Confirmed on-chain — calldata matches the session root hash'}
+            {result.polygonStatus === 'mismatch' && 'Found on-chain, but its calldata does NOT match this session’s root hash'}
+            {result.polygonStatus === 'not_found' && 'This transaction hash could not be found on-chain'}
+            {result.polygonStatus === 'unavailable' && 'Could not reach the blockchain to check right now — this is not evidence of a problem, just an unconfirmed check'}
+          </div>
+        </div>
+      )}
+
+      {c2paCheckUnavailable && (
+        <div className="bg-gray-800 rounded-lg p-4 mb-3">
+          <div className="text-xs text-gray-500 mb-1 font-mono">C2PA / CAWG MANIFEST</div>
+          <div className="text-xs text-yellow-400">
+            A manifest was recorded for this session, but it could not be read right now (storage or parsing
+            issue) — this is not evidence the manifest is invalid, just an unconfirmed check. Try again later.
           </div>
         </div>
       )}

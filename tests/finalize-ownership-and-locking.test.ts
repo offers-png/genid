@@ -16,6 +16,7 @@ vi.mock('@/lib/supabase', () => ({
   tryBeginFinalizing: vi.fn(),
   tryReclaimStaleFinalizing: vi.fn(),
   abortFinalizing: vi.fn(),
+  recordPolygonAnchorTx: vi.fn(),
 }))
 vi.mock('@/lib/storage', () => ({
   downloadFromSessionBucket: vi.fn(),
@@ -50,6 +51,7 @@ import {
   tryBeginFinalizing,
   tryReclaimStaleFinalizing,
   abortFinalizing,
+  recordPolygonAnchorTx,
   type SessionRecord,
   type StepRecord,
 } from '@/lib/supabase'
@@ -154,7 +156,8 @@ beforeEach(() => {
     final_output_thumbnail_path: null,
   })
   vi.mocked(markStepFinal).mockResolvedValue(undefined)
-  vi.mocked(finalizeSession).mockResolvedValue(undefined)
+  vi.mocked(finalizeSession).mockResolvedValue(true)
+  vi.mocked(recordPolygonAnchorTx).mockResolvedValue(true)
 })
 
 describe('POST /api/session/[id]/finalize — ownership (Punch List #4 follow-up)', () => {
@@ -184,7 +187,7 @@ describe('POST /api/session/[id]/finalize — concurrency and lock recovery (Pun
 
   it('returns 409 and does not race when the lock is already held (concurrent finalize)', async () => {
     vi.mocked(getSession).mockResolvedValue(fakeSession({ status: 'active' }))
-    vi.mocked(tryBeginFinalizing).mockResolvedValue(false) // lost the race
+    vi.mocked(tryBeginFinalizing).mockResolvedValue({ acquired: false, token: null }) // lost the race
 
     const res = await call()
     expect(res.status).toBe(409)
@@ -192,14 +195,14 @@ describe('POST /api/session/[id]/finalize — concurrency and lock recovery (Pun
     expect(abortFinalizing).not.toHaveBeenCalled() // never acquired, nothing to release
   })
 
-  it('releases the lock when a validation failure happens AFTER the lock is acquired', async () => {
+  it('releases the lock (with its token) when a validation failure happens AFTER the lock is acquired', async () => {
     vi.mocked(getSession).mockResolvedValue(fakeSession({ status: 'active' }))
-    vi.mocked(tryBeginFinalizing).mockResolvedValue(true)
+    vi.mocked(tryBeginFinalizing).mockResolvedValue({ acquired: true, token: 'token-a' })
     vi.mocked(lookupGenid).mockResolvedValue(null) // registry record missing -> FinalizeError(500)
 
     const res = await call()
     expect(res.status).toBe(500)
-    expect(abortFinalizing).toHaveBeenCalledWith(SESSION_ID)
+    expect(abortFinalizing).toHaveBeenCalledWith(SESSION_ID, 'token-a')
   })
 
   it('treats a recent (non-stale) finalizing lock as still held: 409, no reclaim attempted', async () => {
@@ -212,17 +215,29 @@ describe('POST /api/session/[id]/finalize — concurrency and lock recovery (Pun
     expect(tryReclaimStaleFinalizing).not.toHaveBeenCalled()
   })
 
+  it('treats a "finalizing" session with no finalizing_since as reclaimable (missing lock timestamp)', async () => {
+    vi.mocked(getSession).mockResolvedValue(
+      fakeSession({ status: 'finalizing', finalizing_since: null })
+    )
+    vi.mocked(tryReclaimStaleFinalizing).mockResolvedValue({ acquired: true, token: 'token-recovered' })
+
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect(tryReclaimStaleFinalizing).toHaveBeenCalled()
+    expect(finalizeSession).toHaveBeenCalledWith(SESSION_ID, expect.anything(), expect.anything(), expect.anything(), 'token-recovered')
+  })
+
   it('reclaims a stale finalizing lock (crash recovery) and completes successfully', async () => {
     const staleTimestamp = new Date(Date.now() - 60 * 60 * 1000).toISOString() // 1 hour ago
     vi.mocked(getSession).mockResolvedValue(
       fakeSession({ status: 'finalizing', finalizing_since: staleTimestamp })
     )
-    vi.mocked(tryReclaimStaleFinalizing).mockResolvedValue(true)
+    vi.mocked(tryReclaimStaleFinalizing).mockResolvedValue({ acquired: true, token: 'token-b' })
 
     const res = await call()
     expect(res.status).toBe(200)
     expect(tryReclaimStaleFinalizing).toHaveBeenCalled()
-    expect(finalizeSession).toHaveBeenCalled()
+    expect(finalizeSession).toHaveBeenCalledWith(SESSION_ID, expect.anything(), expect.anything(), expect.anything(), 'token-b')
   })
 
   it('returns 409 when a stale lock reclaim itself loses a race to another caller', async () => {
@@ -230,10 +245,32 @@ describe('POST /api/session/[id]/finalize — concurrency and lock recovery (Pun
     vi.mocked(getSession).mockResolvedValue(
       fakeSession({ status: 'finalizing', finalizing_since: staleTimestamp })
     )
-    vi.mocked(tryReclaimStaleFinalizing).mockResolvedValue(false)
+    vi.mocked(tryReclaimStaleFinalizing).mockResolvedValue({ acquired: false, token: null })
 
     const res = await call()
     expect(res.status).toBe(409)
     expect(abortFinalizing).not.toHaveBeenCalled()
+  })
+
+  it('stops and does not commit a step/certificate when finalizeSession reports the lock was superseded', async () => {
+    vi.mocked(getSession).mockResolvedValue(fakeSession({ status: 'active' }))
+    vi.mocked(tryBeginFinalizing).mockResolvedValue({ acquired: true, token: 'token-c' })
+    vi.mocked(finalizeSession).mockResolvedValue(false) // token no longer matches — lost the lock
+
+    const res = await call()
+    expect(res.status).toBe(409)
+    expect(markStepFinal).not.toHaveBeenCalled()
+    expect(createCertificate).not.toHaveBeenCalled()
+    // Not our lock anymore — must not attempt to release someone else's.
+    expect(abortFinalizing).not.toHaveBeenCalled()
+  })
+
+  it('persists the Polygon anchor tx immediately (token-scoped) rather than waiting for the final commit', async () => {
+    vi.mocked(getSession).mockResolvedValue(fakeSession({ status: 'active', polygon_anchor_tx: null }))
+    vi.mocked(tryBeginFinalizing).mockResolvedValue({ acquired: true, token: 'token-d' })
+
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect(recordPolygonAnchorTx).toHaveBeenCalledWith(SESSION_ID, 'token-d', '0xabc')
   })
 })

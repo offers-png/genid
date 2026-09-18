@@ -14,6 +14,23 @@ export interface CropParams {
   heightPct: number
 }
 
+function isFiniteInRange(n: unknown, min: number, max: number): n is number {
+  return typeof n === 'number' && Number.isFinite(n) && n >= min && n <= max
+}
+
+export function validateCropParams(p: unknown): asserts p is CropParams {
+  const c = p as Partial<CropParams> | null | undefined
+  if (
+    !c ||
+    !isFiniteInRange(c.leftPct, 0, 1) ||
+    !isFiniteInRange(c.topPct, 0, 1) ||
+    !isFiniteInRange(c.widthPct, 0.01, 1) ||
+    !isFiniteInRange(c.heightPct, 0.01, 1)
+  ) {
+    throw new Error('Crop params must have leftPct/topPct in [0,1] and widthPct/heightPct in [0.01,1]')
+  }
+}
+
 export async function applyCrop(buffer: Buffer, p: CropParams): Promise<Buffer> {
   const meta = await sharp(buffer).metadata()
   if (!meta.width || !meta.height) throw new Error('Could not read image dimensions')
@@ -29,6 +46,21 @@ export async function applyCrop(buffer: Buffer, p: CropParams): Promise<Buffer> 
 export interface ColorAdjustParams {
   brightness?: number
   saturation?: number
+}
+
+// modulate() accepts arbitrary multipliers — without bounds, a client could
+// send something like brightness: 1e10, which sharp will happily attempt
+// and which serves no legitimate editing purpose. 0.1x-3x covers the full
+// practical range a "brightness/saturation" slider needs.
+export function validateColorAdjustParams(p: unknown): asserts p is ColorAdjustParams {
+  const c = p as Partial<ColorAdjustParams> | null | undefined
+  if (!c || typeof c !== 'object') throw new Error('color_adjust params are required')
+  if (c.brightness !== undefined && !isFiniteInRange(c.brightness, 0.1, 3)) {
+    throw new Error('brightness must be between 0.1 and 3')
+  }
+  if (c.saturation !== undefined && !isFiniteInRange(c.saturation, 0.1, 3)) {
+    throw new Error('saturation must be between 0.1 and 3')
+  }
 }
 
 export async function applyColorAdjust(buffer: Buffer, p: ColorAdjustParams): Promise<Buffer> {

@@ -62,6 +62,7 @@ Run the migrations, in order, in your Supabase SQL editor:
 # supabase/migrations/007_finalize_atomicity.sql
 # supabase/migrations/008_archive_integrity.sql
 # supabase/migrations/009_auth_and_lock_recovery.sql
+# supabase/migrations/010_step_finalize_race_and_lock_ownership.sql
 # Paste each into Supabase Dashboard → SQL Editor and run in order.
 ```
 
@@ -108,9 +109,20 @@ Covers: session ownership (unauthorized access rejected on every gated
 route), `/api/verify` content binding (a valid signature alone isn't enough
 — the uploaded bytes have to match an authenticated content record),
 finalize concurrency and lock recovery (crash/stale-lock reclaim, lock
-release on validation failure), Stripe verified-name binding, and archive
-signature binding (session/step/hash-bound, tamper and cross-step replay
-rejected).
+ownership tokens, missing-timestamp handling, lock release on validation
+failure), Stripe verified-name binding, archive signature binding
+(session/step/hash-bound, tamper and cross-step replay rejected), archive
+recoverability (upload-then-commit-then-delete ordering; a DB failure never
+deletes the original), and embed content-log-failure handling (a stamped
+image is never returned unless its verification record actually saved).
+
+`tests/integration/*.integration.test.ts` run against a real embedded
+Postgres ([PGlite](https://pglite.dev), no Docker required) executing the
+actual SQL from the migrations — the atomic lock-claim UPDATE pattern and
+the `create_step_if_session_active` function — rather than asserting a
+mocked function was called with the right arguments. See
+`tests/integration/db-setup.ts` for what this can and can't prove about
+true multi-connection concurrency.
 
 ## Deployment (Render)
 
@@ -124,19 +136,41 @@ rejected).
 
 ## Security
 
-- Database is **append-only** — no updates or deletes possible on content logs
-- GENID verification status is **immutable** once granted
+- The application code has **no code path that updates or deletes** rows
+  in `genid_content_log`/`genid_steps` once written. This is a code-level
+  convention, not a database-level guarantee: the service-role key this app
+  uses has full read/write access and bypasses Row Level Security
+  entirely (that's what "service role" means in Supabase), so nothing at
+  the database layer actually prevents an update or delete — only the
+  application never issuing one does. Don't describe this externally as a
+  database-enforced "append-only" guarantee; it isn't one.
+- `genid_registry.verified` only ever moves from `false` to `true` in
+  application code (the Stripe webhook's `requires_input`/`canceled`
+  handlers explicitly guard against downgrading an already-verified row),
+  but this is likewise a code-level convention, not a database constraint
+  — the service-role key could update it either direction.
 - Notary signatures use **HMAC-SHA256** with a server-side secret
-- Only the server's `service_role` key can write to the database
+  (`GENID_SIGNING_SECRET`), separate from `AUTH_SESSION_SECRET`, which
+  signs session cookies/magic-link tokens instead.
+- Only the server's `service_role` key can write to the database from
+  application code; RLS policies (migrations 006, 009) scope what an
+  `anon`-key client could reach directly, which this app never uses.
 - Session/content ownership requires a signed-in identity (magic-link
   cookie, `lib/auth.ts`) — a bare email or session ID is never sufficient
-  to create, view, edit, or finalize someone's content
+  to create, view, edit, or finalize someone's content.
 - `/api/verify` requires the uploaded file's exact bytes to match a
   server-side content record, not just an internally-consistent embedded
-  signature — see `app/api/verify/route.ts`
-- Finalize is lock-protected against concurrent calls, with automatic
-  recovery from a stale/crashed lock — see `lib/supabase.ts`
-  (`tryBeginFinalizing` / `tryReclaimStaleFinalizing`)
+  signature — see `app/api/verify/route.ts`. This proves who *submitted*
+  content through GenID under an ID-verified identity; it does not prove
+  who created the underlying image or whether it was AI-generated.
+- Finalize is lock-protected against concurrent calls (with an ownership
+  token so a slow-but-alive request can't clobber a lock that's since been
+  reclaimed as stale — migration 010) and against a step landing after the
+  session's root hash was already computed (`create_step_if_session_active`,
+  migration 010) — see `lib/supabase.ts`.
+- Prompts, edit parameters, and uploads are size/dimension-validated, model
+  generation is rate-limited per identity, and external calls (model
+  provider, Polygon RPC) are time-bounded — see `lib/limits.ts`.
 
 See [`DATA_RETENTION.md`](./DATA_RETENTION.md) for what's stored, how long,
 and what compression after finalize does and doesn't change. A basic

@@ -11,6 +11,7 @@ import {
   tryBeginFinalizing,
   tryReclaimStaleFinalizing,
   abortFinalizing,
+  recordPolygonAnchorTx,
   type StepRecord,
 } from '@/lib/supabase'
 import { getAuthenticatedRecord } from '@/lib/auth'
@@ -18,6 +19,7 @@ import { downloadFromSessionBucket, uploadToSessionBucket, c2paExportStoragePath
 import { generateCertificatePdf, buildCertificateSteps, type CertificateStep } from '@/lib/certificate'
 import { computeSessionRootHash } from '@/lib/chain'
 import { stampOnBlockchain } from '@/lib/blockchain'
+import { withTimeout, EXTERNAL_CALL_TIMEOUT_MS } from '@/lib/limits'
 import { embedC2paManifest } from '@/lib/c2pa'
 import { archiveNonFinalSteps } from '@/lib/lifecycle'
 import { env } from '@/lib/env'
@@ -65,6 +67,7 @@ class FinalizeError extends Error {
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let sessionId: string | undefined
   let lockAcquired = false
+  let lockToken: string | null = null
 
   try {
     const resolvedParams = await params
@@ -89,9 +92,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     if (session.status === 'finalizing') {
-      const heldSince = session.finalizing_since ? new Date(session.finalizing_since).getTime() : 0
-      const isStale = Date.now() - heldSince > STALE_LOCK_MS
-      lockAcquired = isStale && (await tryReclaimStaleFinalizing(sessionId, STALE_LOCK_MS))
+      let isStale: boolean
+      if (!session.finalizing_since) {
+        // A 'finalizing' row with no timestamp is a data anomaly (every
+        // path that sets this status also sets finalizing_since) — we
+        // can't tell how long it's actually been held. The safe choice,
+        // given every write below is idempotent-safe to redo, is to treat
+        // it as reclaimable rather than blocking this session forever.
+        console.warn(`Session ${sessionId} is 'finalizing' with no finalizing_since recorded — treating its lock as reclaimable.`)
+        isStale = true
+      } else {
+        isStale = Date.now() - new Date(session.finalizing_since).getTime() > STALE_LOCK_MS
+      }
+
+      if (isStale) {
+        const reclaim = await tryReclaimStaleFinalizing(sessionId, STALE_LOCK_MS)
+        lockAcquired = reclaim.acquired
+        lockToken = reclaim.token
+      }
       if (!lockAcquired) {
         throw new FinalizeError(
           'Session is already being finalized by another request — try again shortly.',
@@ -99,10 +117,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         )
       }
       // Reclaimed a stale lock: fall through and treat this exactly like a
-      // fresh attempt on an 'active' session. Nothing is committed until
-      // finalizeSession() at the very end, so every step below is safe to
-      // redo — a half-finished prior attempt just gets its work recomputed
-      // or its idempotent writes (anchor, certificate) reused as-is.
+      // fresh attempt on an 'active' session. Nothing is committed under
+      // OUR token until the token-gated finalizeSession() call below, so
+      // every step until then is safe to redo — a half-finished prior
+      // attempt just gets its work recomputed or its already-persisted,
+      // token-scoped writes (recordPolygonAnchorTx) reused as-is.
     }
 
     const alreadyFinalized = session.status === 'finalized'
@@ -114,7 +133,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // redoing the generation/anchoring/upload work and racing on the final
     // writes.
     if (!alreadyFinalized && !lockAcquired) {
-      lockAcquired = await tryBeginFinalizing(sessionId)
+      const claim = await tryBeginFinalizing(sessionId)
+      lockAcquired = claim.acquired
+      lockToken = claim.token
       if (!lockAcquired) {
         throw new FinalizeError(
           'Session is already being finalized by another request — try again shortly.',
@@ -167,14 +188,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const sessionRootHash = session.session_root_hash ?? computeSessionRootHash(steps.map((s) => s.step_signature ?? ''))
 
     let polygonAnchorTx = session.polygon_anchor_tx
-    if (!polygonAnchorTx) {
+    if (!polygonAnchorTx && !alreadyFinalized) {
       try {
-        const stamp = await stampOnBlockchain({
-          genidCode: session.genid_code,
-          contentHash: sessionRootHash,
-          fileName: `session-${sessionId}`,
-        })
+        const stamp = await withTimeout(
+          stampOnBlockchain({
+            genidCode: session.genid_code,
+            contentHash: sessionRootHash,
+            fileName: `session-${sessionId}`,
+          }),
+          EXTERNAL_CALL_TIMEOUT_MS,
+          'Polygon anchor'
+        )
         polygonAnchorTx = stamp.txHash
+        // Persist the tx and refresh the lock heartbeat IMMEDIATELY — not
+        // at the end with everything else. If this request's lock later
+        // gets reclaimed as stale (e.g. it crashes during the still-slow
+        // PDF/C2PA work below), the new holder's getSession() read will
+        // already see this txHash and skip anchoring again, instead of
+        // submitting a second on-chain transaction for the same root hash.
+        if (lockToken) {
+          await recordPolygonAnchorTx(sessionId, lockToken, polygonAnchorTx)
+        }
       } catch (blockchainErr) {
         console.error('Polygon anchor failed (non-fatal):', blockchainErr)
       }
@@ -225,6 +259,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const pdfBuffer = await generateCertificatePdf({
       genidCode: session.genid_code,
       creatorName: record.user_name,
+      nameVerified: record.name_verified ?? false,
       sessionId: session.id,
       totalSteps: steps.length,
       totalDurationSeconds,
@@ -239,11 +274,32 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const pdfPath = `${sessionId}/certificate.pdf`
     await uploadToSessionBucket(pdfPath, pdfBuffer, 'application/pdf', { upsert: true })
 
-    // Only now commit the finalized state.
-    await markStepFinal(finalStep.id, sessionId)
+    // Only now commit the finalized state. finalizeSession — the write
+    // that actually transitions the session out of 'finalizing' — goes
+    // FIRST and is token-gated: if this request's lock has since been
+    // reclaimed by another process (this one ran long enough to look
+    // dead), that update affects zero rows and we must stop here rather
+    // than going on to mark a step final or write a certificate as if we
+    // still owned this session's finalize.
     if (!alreadyFinalized) {
-      await finalizeSession(sessionId, finalStep.id, sessionRootHash, polygonAnchorTx)
+      if (!lockToken) {
+        throw new FinalizeError('Internal error: finalizing without a lock token', 500)
+      }
+      const committed = await finalizeSession(sessionId, finalStep.id, sessionRootHash, polygonAnchorTx, lockToken)
+      if (!committed) {
+        // Not our lock to release — a different request already holds
+        // it under a different token. Nothing we did above was written
+        // anywhere durable except the token-scoped anchor tx (already
+        // safely reusable by whoever holds the lock now), so there is
+        // nothing to clean up.
+        lockAcquired = false
+        throw new FinalizeError(
+          'This session’s finalize lock was reclaimed by another request while this one was still working — nothing was committed. Please retry.',
+          409
+        )
+      }
     }
+    await markStepFinal(finalStep.id, sessionId)
     if (c2paManifestId) {
       await setSessionC2paManifestId(sessionId, c2paManifestId)
     }
@@ -281,15 +337,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     })
   } catch (err: unknown) {
     // Release the lock so the session isn't stuck in 'finalizing' forever —
-    // scoped to WHERE status = 'finalizing' in abortFinalizing, so this is a
-    // harmless no-op if the failure happened after finalizeSession() already
-    // moved the session to 'finalized' (that case is handled by this same
-    // route's existing stuck-session recovery path instead). This runs for
-    // EVERY failure path once the lock is held, including plain validation
+    // token-scoped in abortFinalizing, so this is a harmless no-op both
+    // when the failure happened after finalizeSession() already moved the
+    // session to 'finalized' (handled by this route's own stuck-session
+    // recovery path instead) AND when a different request has since
+    // reclaimed this lock under a new token (releasing THAT lock would be
+    // exactly the bug this token scheme exists to prevent). Runs for EVERY
+    // failure path once the lock is held, including plain validation
     // errors (FinalizeError), not just unexpected exceptions.
-    if (lockAcquired && sessionId) {
+    if (lockAcquired && sessionId && lockToken) {
       try {
-        await abortFinalizing(sessionId)
+        await abortFinalizing(sessionId, lockToken)
       } catch (releaseErr) {
         console.error('Failed to release finalize lock:', releaseErr)
       }

@@ -11,6 +11,16 @@ export function stepStoragePath(sessionId: string, stepNumber: number, ext: stri
   return `${sessionId}/step_${stepNumber}.${ext}`
 }
 
+// A distinct path for a step's compressed archival copy (lib/lifecycle.ts)
+// — never the same object as the original. Archival uploads here FIRST,
+// then atomically repoints the step's output_storage_path column at this
+// path, then deletes the original — see markStepArchived. Never reusing
+// the original path means a crash before that DB write can't leave a
+// mismatched file sitting under a path the DB still thinks is the original.
+export function archiveStepStoragePath(sessionId: string, stepNumber: number): string {
+  return `${sessionId}/step_${stepNumber}_archive.png`
+}
+
 export function c2paExportStoragePath(sessionId: string): string {
   return `${sessionId}/c2pa-export.png`
 }
@@ -38,6 +48,15 @@ export async function downloadFromSessionBucket(path: string): Promise<Buffer> {
   const { data, error } = await getAdmin().storage.from(BUCKET).download(path)
   if (error || !data) throw new Error(`Storage download failed: ${error?.message ?? 'not found'}`)
   return Buffer.from(await data.arrayBuffer())
+}
+
+// Best-effort cleanup — callers treat a failure here as non-fatal (a
+// leftover object wastes storage but never corrupts anything the DB
+// references, since it's only ever called after the DB has already been
+// repointed away from this path).
+export async function deleteFromSessionBucket(path: string): Promise<void> {
+  const { error } = await getAdmin().storage.from(BUCKET).remove([path])
+  if (error) throw new Error(`Storage delete failed: ${error.message}`)
 }
 
 // Sums the size of every object stored under a session's prefix (step

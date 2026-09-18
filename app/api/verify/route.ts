@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { extractGenid, hashBuffer, verifyNotarySignature } from '@/lib/steganography'
 import { lookupGenid, supabaseAdmin } from '@/lib/supabase'
 import { env } from '@/lib/env'
+import { validateUploadSize, validateImageDimensions, ValidationError } from '@/lib/limits'
 
 // POST multipart/form-data: { image }
 // Returns: creator info if GENID found, plus signature verification status.
@@ -15,6 +16,14 @@ export async function POST(req: NextRequest) {
     }
 
     const imageBuffer = Buffer.from(await imageFile.arrayBuffer())
+    try {
+      validateUploadSize(imageBuffer.length)
+      await validateImageDimensions(imageBuffer)
+    } catch (err) {
+      if (err instanceof ValidationError) return NextResponse.json({ error: err.message }, { status: 400 })
+      throw err
+    }
+
     const contentHash = hashBuffer(imageBuffer)
 
     const extracted = await extractGenid(imageBuffer)
@@ -82,12 +91,16 @@ export async function POST(req: NextRequest) {
       logEntry?.created_at ??
       (extracted.timestamp ? new Date(extracted.timestamp * 1000).toISOString() : null)
 
+    // This proves who SUBMITTED this file through GenID under an
+    // ID-verified identity — it does not prove who created the underlying
+    // image, or that it was AI-generated at all. GenID stamps content on
+    // request; it has no way to know where the pixels actually came from.
     const verified = signaturePresent && signatureValid && contentMatchesRecord
     const nameVerified = record.name_verified ?? false
     const message = verified
       ? nameVerified
-        ? `Verified AI content created by ${record.user_name} (${record.genid_code})`
-        : `Verified AI content under GENID ${record.genid_code} — the creator's identity was ID-verified, but the display name "${record.user_name}" is self-reported, not confirmed by that ID document.`
+        ? `This file was stamped through GenID by ${record.user_name} (${record.genid_code}), whose identity was ID-verified at registration.`
+        : `This file was stamped through GenID under GENID ${record.genid_code} — the submitter's identity was ID-verified, but the display name "${record.user_name}" is self-reported, not confirmed by that ID document.`
       : !signaturePresent
         ? 'GENID code found and registered, but this image has no embedded notary signature to verify. Authenticity cannot be confirmed.'
         : !signatureValid

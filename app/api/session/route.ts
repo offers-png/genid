@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
   createSession,
-  createStep,
+  createStepIfActive,
   listSessionsForGenid,
   getCertificatesForSessions,
+  countRecentGenerationsForGenid,
 } from '@/lib/supabase'
 import { getAuthenticatedRecord } from '@/lib/auth'
 import { uploadToSessionBucket, stepStoragePath } from '@/lib/storage'
@@ -11,6 +12,7 @@ import { hashBuffer } from '@/lib/steganography'
 import { buildStepContent, computeStepHash, signStepHash } from '@/lib/chain'
 import { openAiImageAdapter } from '@/lib/adapters/openai-image'
 import { env } from '@/lib/env'
+import { validatePromptText, ValidationError, GENERATION_RATE_LIMIT, GENERATION_RATE_WINDOW_MS, withTimeout, EXTERNAL_CALL_TIMEOUT_MS } from '@/lib/limits'
 
 // The single Phase 1 Model Adapter. Swapping providers later means adding a
 // new file under lib/adapters/ and changing this one line.
@@ -57,9 +59,13 @@ export async function GET(req: NextRequest) {
 // enough to create content attributed to anyone's GENID code.
 export async function POST(req: NextRequest) {
   try {
-    const { promptText } = await req.json()
-    if (!promptText) {
-      return NextResponse.json({ error: 'promptText is required' }, { status: 400 })
+    const body = await req.json()
+    let promptText: string
+    try {
+      promptText = validatePromptText(body?.promptText)
+    } catch (err) {
+      if (err instanceof ValidationError) return NextResponse.json({ error: err.message }, { status: 400 })
+      throw err
     }
 
     const record = await getAuthenticatedRecord(req)
@@ -70,6 +76,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Your identity has not been verified yet.' }, { status: 403 })
     }
 
+    // Every generate/regenerate step calls a paid external model API —
+    // bound spend per identity, not just validate input shape.
+    const recentGenerations = await countRecentGenerationsForGenid(record.genid_code, GENERATION_RATE_WINDOW_MS)
+    if (recentGenerations >= GENERATION_RATE_LIMIT) {
+      return NextResponse.json(
+        { error: `Rate limit exceeded: max ${GENERATION_RATE_LIMIT} generations per ${GENERATION_RATE_WINDOW_MS / 60000} minutes. Please wait and try again.` },
+        { status: 429 }
+      )
+    }
+
     const session = await createSession({
       genid_code: record.genid_code,
       content_type: 'image',
@@ -78,7 +94,7 @@ export async function POST(req: NextRequest) {
       identity_verification_tier: 'id_verified',
     })
 
-    const generation = await adapter.generateImage({ promptText })
+    const generation = await withTimeout(adapter.generateImage({ promptText }), EXTERNAL_CALL_TIMEOUT_MS, 'Image generation')
     const outputHash = hashBuffer(generation.outputBuffer)
     const storagePath = stepStoragePath(session.id, 1, generation.ext)
     await uploadToSessionBucket(storagePath, generation.outputBuffer, generation.mimeType)
@@ -98,7 +114,7 @@ export async function POST(req: NextRequest) {
     const stepHash = computeStepHash(stepContent, null)
     const stepSignature = signStepHash(stepHash, env.genidSigningSecret)
 
-    const step = await createStep({
+    const step = await createStepIfActive({
       session_id: session.id,
       step_number: 1,
       step_type: 'generate',
@@ -118,13 +134,15 @@ export async function POST(req: NextRequest) {
       is_final_selection: false,
     })
 
+    // No imageBase64 here — the file is already uploaded by this point, so
+    // the client just fetches /api/session/[id]/step/[stepId]/image
+    // directly instead of the response carrying the full image bytes
+    // twice (once as this JSON payload, once again when displayed).
     return NextResponse.json({
       sessionId: session.id,
       stepId: step.id,
       outputHash,
       stepSignature,
-      mimeType: generation.mimeType,
-      imageBase64: generation.outputBuffer.toString('base64'),
     })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Session creation failed'

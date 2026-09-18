@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit'
+import sharp from 'sharp'
 import type { StepRecord } from './supabase'
 import { downloadFromSessionBucket } from './storage'
 
@@ -15,25 +16,51 @@ export interface CertificateStep {
   isFinal: boolean
 }
 
+// The PDF's version-history thumbnail is 140x140 (see generateCertificatePdf
+// below) — no need to hold a full-resolution original in memory just to
+// shrink it at render time. Only applied to non-final steps; the final
+// step's buffer is also used as the source for the C2PA-signed export
+// (app/api/session/[id]/finalize/route.ts) and must stay untouched.
+const THUMBNAIL_MAX_DIMENSION = 300
+
 // Shared by the finalize route and the certificate-regenerate route, so
 // both build the exact same timeline from the same source data. Downloads
 // whatever is CURRENTLY stored at each step's path — for an already-
 // archived non-final step (lib/lifecycle.ts) that's the compressed copy,
-// which is expected and fine for a certificate thumbnail.
+// which is expected and fine for a certificate thumbnail. For a session
+// with many non-final steps (rejected regenerations/edits), downsizing
+// each one here — rather than embedding it full-resolution into the PDF
+// only to render at 140x140 — is what keeps this step's memory/PDF-size
+// cost from scaling with the original image size (Sept 18 second
+// follow-up, "fetching all images for certificates will become
+// expensive").
 export async function buildCertificateSteps(steps: StepRecord[], finalStepId: string): Promise<CertificateStep[]> {
   return Promise.all(
-    steps.map(async (step): Promise<CertificateStep> => ({
-      stepNumber: step.step_number,
-      stepType: step.step_type,
-      editType: step.edit_type,
-      promptText: step.prompt_text,
-      userNote: step.user_note,
-      outputHash: step.output_hash,
-      stepSignature: step.step_signature,
-      responseTimestamp: step.response_timestamp,
-      imageBuffer: step.output_storage_path ? await downloadFromSessionBucket(step.output_storage_path) : null,
-      isFinal: step.id === finalStepId,
-    }))
+    steps.map(async (step): Promise<CertificateStep> => {
+      const isFinal = step.id === finalStepId
+      let imageBuffer: Buffer | null = null
+      if (step.output_storage_path) {
+        const original = await downloadFromSessionBucket(step.output_storage_path)
+        imageBuffer = isFinal
+          ? original
+          : await sharp(original)
+              .resize({ width: THUMBNAIL_MAX_DIMENSION, height: THUMBNAIL_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+              .png({ compressionLevel: 9 })
+              .toBuffer()
+      }
+      return {
+        stepNumber: step.step_number,
+        stepType: step.step_type,
+        editType: step.edit_type,
+        promptText: step.prompt_text,
+        userNote: step.user_note,
+        outputHash: step.output_hash,
+        stepSignature: step.step_signature,
+        responseTimestamp: step.response_timestamp,
+        imageBuffer,
+        isFinal,
+      }
+    })
   )
 }
 
@@ -43,6 +70,7 @@ export async function buildCertificateSteps(steps: StepRecord[], finalStepId: st
 export function generateCertificatePdf(params: {
   genidCode: string
   creatorName: string
+  nameVerified: boolean
   sessionId: string
   totalSteps: number
   totalDurationSeconds: number
@@ -72,7 +100,7 @@ export function generateCertificatePdf(params: {
 
     doc.fontSize(11)
     doc.text(`GENID Code: ${params.genidCode}`)
-    doc.text(`Creator: ${params.creatorName}`)
+    doc.text(`Creator: ${params.creatorName}${params.nameVerified ? '' : ' (self-reported, not ID-verified)'}`)
     doc.text(`Session ID: ${params.sessionId}`)
     doc.text(`Generated: ${params.generatedAt.toISOString()}`)
     doc.text(`Total Steps: ${params.totalSteps}`)
@@ -182,9 +210,11 @@ export function generateCertificatePdf(params: {
     ensureSpace(60)
     doc.moveDown(0.6)
     doc.fontSize(8).fillColor('gray').text(
-      'This certificate documents the creative process behind this content — every version, when it ' +
-        'was made, and by whom — and is tamper-evident via the signatures above. It does not grant ' +
-        'copyright; copyrightability is determined by courts and the U.S. Copyright Office.',
+      'This certificate documents a process recorded under the named GenID account — every version, ' +
+        'when it was submitted, and under which identity — and is tamper-evident via the signatures ' +
+        'above. It records who submitted this content through GenID, not necessarily who created the ' +
+        'underlying image or whether it was AI-generated. It does not grant copyright; ' +
+        'copyrightability is determined by courts and the U.S. Copyright Office.',
       { align: 'left' }
     )
 

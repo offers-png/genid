@@ -14,6 +14,14 @@ vi.mock('@/lib/supabase', () => ({
   lookupGenid: vi.fn(),
   supabaseAdmin: { from: vi.fn() },
 }))
+// Upload size/dimension validation (lib/limits.ts) is covered by its own
+// tests — this suite is only about the content-binding decision logic, and
+// the fake "image" bytes below aren't a real decodable image.
+vi.mock('@/lib/limits', () => ({
+  validateUploadSize: vi.fn(),
+  validateImageDimensions: vi.fn(),
+  ValidationError: class ValidationError extends Error {},
+}))
 
 import { extractGenid, hashBuffer, verifyNotarySignature } from '@/lib/steganography'
 import { lookupGenid, supabaseAdmin } from '@/lib/supabase'

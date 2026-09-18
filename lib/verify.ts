@@ -4,6 +4,7 @@ import { hashBuffer } from './steganography'
 import { buildStepContent, computeStepHash, computeSessionRootHash, signStepHash, buildArchiveContent } from './chain'
 import { verifyOnBlockchain } from './blockchain'
 import { env } from './env'
+import { withTimeout, BLOCKCHAIN_READ_TIMEOUT_MS } from './limits'
 
 // Recompute-and-compare verification (Build Spec Section 5.2.4) — the
 // endpoint that lets a third party with no GenID account confirm a
@@ -47,6 +48,22 @@ export interface StepVerification {
   valid: boolean
 }
 
+// Distinct outcomes for the Polygon anchor check (Sept 18 second
+// follow-up, "missing evidence, unavailable services, and detected
+// tampering should produce distinct results"):
+//  - not_anchored: no tx was ever recorded — nothing to check, not a
+//    failure (anchoring is optional).
+//  - confirmed: the tx exists on-chain and its calldata contains this
+//    session's root hash.
+//  - mismatch: the tx exists on-chain but its calldata does NOT contain
+//    the expected root hash — positive evidence of a problem.
+//  - not_found: the recorded tx hash doesn't resolve to any transaction
+//    on-chain at all.
+//  - unavailable: the chain couldn't be reached/queried (RPC error,
+//    timeout) — we simply don't know, which is not the same claim as
+//    "checked and it's wrong."
+export type PolygonAnchorStatus = 'not_anchored' | 'confirmed' | 'mismatch' | 'not_found' | 'unavailable'
+
 export interface SessionVerification {
   sessionId: string
   found: boolean
@@ -57,7 +74,7 @@ export interface SessionVerification {
   rootHashValid: boolean | null
   storedRootHash: string | null
   polygonAnchorTx: string | null
-  polygonConfirmed: boolean | null
+  polygonStatus: PolygonAnchorStatus
   overallValid: boolean
 }
 
@@ -72,7 +89,7 @@ function notFoundResult(sessionId: string): SessionVerification {
     rootHashValid: null,
     storedRootHash: null,
     polygonAnchorTx: null,
-    polygonConfirmed: null,
+    polygonStatus: 'not_anchored',
     overallValid: false,
   }
 }
@@ -167,14 +184,21 @@ export async function verifySession(sessionId: string): Promise<SessionVerificat
     rootHashValid = computeSessionRootHash(signaturesInOrder) === session.session_root_hash
   }
 
-  let polygonConfirmed: boolean | null = null
+  let polygonStatus: PolygonAnchorStatus = 'not_anchored'
   if (session.polygon_anchor_tx) {
     try {
-      const chainResult = await verifyOnBlockchain(session.polygon_anchor_tx)
-      polygonConfirmed =
-        chainResult.confirmed && !!session.session_root_hash && !!chainResult.payload?.includes(session.session_root_hash)
+      const chainResult = await withTimeout(verifyOnBlockchain(session.polygon_anchor_tx), BLOCKCHAIN_READ_TIMEOUT_MS, 'Polygon lookup')
+      if (!chainResult.confirmed) {
+        polygonStatus = 'not_found'
+      } else if (session.session_root_hash && chainResult.payload?.includes(session.session_root_hash)) {
+        polygonStatus = 'confirmed'
+      } else {
+        polygonStatus = 'mismatch'
+      }
     } catch {
-      polygonConfirmed = false
+      // Couldn't reach/query the chain — genuinely unknown, not evidence
+      // of a problem. Distinct from 'mismatch'/'not_found', which ARE.
+      polygonStatus = 'unavailable'
     }
   }
 
@@ -188,7 +212,10 @@ export async function verifySession(sessionId: string): Promise<SessionVerificat
     rootHashValid,
     storedRootHash: session.session_root_hash,
     polygonAnchorTx: session.polygon_anchor_tx,
-    polygonConfirmed,
-    overallValid: chainValid && rootHashValid !== false && polygonConfirmed !== false,
+    polygonStatus,
+    // 'unavailable' and 'not_anchored' are inconclusive, not failures —
+    // anchoring is optional and the hash chain's tamper-evidence doesn't
+    // depend on it. 'mismatch'/'not_found' are actual negative evidence.
+    overallValid: chainValid && rootHashValid !== false && polygonStatus !== 'mismatch' && polygonStatus !== 'not_found',
   }
 }
