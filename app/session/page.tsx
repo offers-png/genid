@@ -1,24 +1,39 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 
-type Status = 'idle' | 'generating' | 'error'
+type Status = 'checking_auth' | 'signed_out' | 'idle' | 'generating' | 'error'
 
 // Entry point only — creates session step 1, then hands off to the durable,
 // bookmarkable /session/[id] view. This page never renders workspace state
 // itself, so refreshing or navigating away and back doesn't lose anything:
 // the session lives at its own URL from the moment it exists.
+//
+// Identity comes from the signed-in session cookie, not a typed email — a
+// bare email field used to be enough to create sessions under anyone's
+// GENID code (Security & Trust Fix Punch List #4, Sept 18 follow-up).
 export default function NewSessionPage() {
   const router = useRouter()
-  const [email, setEmail] = useState('')
   const [promptText, setPromptText] = useState('')
-  const [status, setStatus] = useState<Status>('idle')
+  const [status, setStatus] = useState<Status>('checking_auth')
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/auth/me').then((res) => {
+      if (cancelled) return
+      setStatus(res.ok ? 'idle' : 'signed_out')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault()
-    if (!email || !promptText) return
+    if (!promptText) return
 
     setStatus('generating')
     setError('')
@@ -27,7 +42,7 @@ export default function NewSessionPage() {
       const res = await fetch('/api/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, promptText }),
+        body: JSON.stringify({ promptText }),
       })
       const data = await res.json()
 
@@ -42,6 +57,23 @@ export default function NewSessionPage() {
       setError('Network error — please try again')
       setStatus('error')
     }
+  }
+
+  if (status === 'checking_auth') {
+    return <div className="max-w-2xl mx-auto px-6 py-16 text-gray-500 text-sm">Loading…</div>
+  }
+
+  if (status === 'signed_out') {
+    return (
+      <div className="max-w-2xl mx-auto px-6 py-16">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
+          <p className="text-gray-400 mb-4">Sign in to start a session.</p>
+          <Link href="/login" className="bg-violet-600 hover:bg-violet-500 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-block">
+            Sign in →
+          </Link>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -64,19 +96,6 @@ export default function NewSessionPage() {
 
       <form onSubmit={handleGenerate} className="space-y-6">
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">Your Registered Email</label>
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={e => setEmail(e.target.value)}
-            placeholder="you@example.com"
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-violet-500 transition-colors"
-          />
-          <p className="text-xs text-gray-500 mt-1">Must match a verified GENID identity</p>
-        </div>
-
-        <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">Prompt</label>
           <textarea
             required
@@ -96,7 +115,7 @@ export default function NewSessionPage() {
 
         <button
           type="submit"
-          disabled={!email || !promptText || status === 'generating'}
+          disabled={!promptText || status === 'generating'}
           className="w-full bg-violet-600 hover:bg-violet-500 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white py-3 rounded-lg font-medium transition-colors"
         >
           {status === 'generating' ? (

@@ -1,7 +1,7 @@
 import { getSession, getSessionSteps } from './supabase'
 import { downloadFromSessionBucket } from './storage'
 import { hashBuffer } from './steganography'
-import { buildStepContent, computeStepHash, computeSessionRootHash, signStepHash } from './chain'
+import { buildStepContent, computeStepHash, computeSessionRootHash, signStepHash, buildArchiveContent } from './chain'
 import { verifyOnBlockchain } from './blockchain'
 import { env } from './env'
 
@@ -26,10 +26,14 @@ import { env } from './env'
 // copy after finalize, so re-hashing it can never match output_hash again
 // — that's expected, not tampering. But that doesn't mean the archived
 // step's file integrity goes unchecked: archiveIntegrityValid checks the
-// CURRENT file against archive_hash (recorded at archive time over the
-// compressed bytes) and archive_hash against archive_signature, so an
-// archived step's stored file still has to match something specific —
-// just not output_hash.
+// CURRENT file against archive_hash, and archive_hash against a signature
+// bound to this session, this step, and the ORIGINAL output_hash (not just
+// the archive_hash in isolation — see buildArchiveContent), so an archive
+// signature computed for one step can't validate for a different step or
+// session. A step marked archived with no archive_hash/archive_signature
+// recorded (or one that fails either check) has NO PROOF of its current
+// file's integrity, and is reported as unverified — not silently passed —
+// because "we can't check this" and "this checks out" are different claims.
 
 export interface StepVerification {
   stepId: string
@@ -90,19 +94,19 @@ export async function verifySession(sessionId: string): Promise<SessionVerificat
 
     if (step.output_archived) {
       if (!step.archive_hash || !step.archive_signature) {
-        // Archived before archive_hash/archive_signature existed (this
-        // step predates that migration) — there's nothing recorded to
-        // check the current file against. Left null (not failed): the
-        // same "skip the file check" behavior this had before archive
-        // integrity tracking existed, not a false tamper report on data
-        // that was never wrong in the first place.
-        archiveIntegrityValid = null
+        // No archive proof recorded at all (e.g. archived before this
+        // column existed) — there is nothing to check the current file
+        // against, so this is reported as UNVERIFIED, not passed through.
+        // A missing proof and a valid proof are not the same claim.
+        archiveIntegrityValid = false
       } else {
         // The original bytes are gone by design — check the CURRENT
-        // (compressed) file against the hash recorded at archive time,
-        // and that hash against its own signature, instead of skipping
-        // the file check entirely.
-        const archiveSignatureValid = signStepHash(step.archive_hash, signingSecret) === step.archive_signature
+        // (compressed) file against the hash recorded at archive time, and
+        // that hash against a signature bound to this exact session/step/
+        // output_hash (buildArchiveContent), instead of skipping the file
+        // check entirely or trusting a bare, unbound hash.
+        const archiveContent = buildArchiveContent(step.session_id, step.id, step.output_hash ?? '', step.archive_hash)
+        const archiveSignatureValid = signStepHash(archiveContent, signingSecret) === step.archive_signature
 
         if (archiveSignatureValid && step.output_storage_path) {
           try {
@@ -149,7 +153,7 @@ export async function verifySession(sessionId: string): Promise<SessionVerificat
       signatureValid,
       chainLinkValid,
       valid:
-        (step.output_archived ? archiveIntegrityValid !== false : fileHashValid) && signatureValid && chainLinkValid,
+        (step.output_archived ? archiveIntegrityValid === true : fileHashValid) && signatureValid && chainLinkValid,
     })
 
     signaturesInOrder.push(step.step_signature ?? '')

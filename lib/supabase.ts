@@ -17,6 +17,7 @@ export interface GenidRecord {
   genid_code: string
   user_name: string
   self_reported_name?: string | null
+  name_verified?: boolean
   email: string
   stripe_verification_id: string | null
   verified: boolean
@@ -98,6 +99,7 @@ export interface SessionRecord {
   c2pa_manifest_id: string | null
   created_at: string
   finalized_at: string | null
+  finalizing_since: string | null
 }
 
 export interface StepRecord {
@@ -169,12 +171,34 @@ export async function getSession(sessionId: string): Promise<SessionRecord | nul
 export async function tryBeginFinalizing(sessionId: string): Promise<boolean> {
   const { data, error } = await getAdmin()
     .from('genid_sessions')
-    .update({ status: 'finalizing' })
+    .update({ status: 'finalizing', finalizing_since: new Date().toISOString() })
     .eq('id', sessionId)
     .eq('status', 'active')
     .select('id')
 
   if (error) throw new Error(`Failed to begin finalize: ${error.message}`)
+  return (data?.length ?? 0) > 0
+}
+
+// Reclaims a 'finalizing' lock that's been held longer than staleAfterMs —
+// recovery for a crash that skipped even the finalize route's own catch
+// block (process kill, uncaught rejection), which is the one way a session
+// could get stuck in 'finalizing' forever under the normal abortFinalizing
+// path. Same atomic claim pattern as tryBeginFinalizing: the WHERE clause
+// (status = 'finalizing' AND finalizing_since older than the cutoff) means
+// only a genuinely stale lock can be reclaimed, and only one caller wins if
+// several try at once.
+export async function tryReclaimStaleFinalizing(sessionId: string, staleAfterMs: number): Promise<boolean> {
+  const cutoff = new Date(Date.now() - staleAfterMs).toISOString()
+  const { data, error } = await getAdmin()
+    .from('genid_sessions')
+    .update({ status: 'finalizing', finalizing_since: new Date().toISOString() })
+    .eq('id', sessionId)
+    .eq('status', 'finalizing')
+    .lt('finalizing_since', cutoff)
+    .select('id')
+
+  if (error) throw new Error(`Failed to reclaim stale finalize lock: ${error.message}`)
   return (data?.length ?? 0) > 0
 }
 
@@ -185,7 +209,7 @@ export async function tryBeginFinalizing(sessionId: string): Promise<boolean> {
 export async function abortFinalizing(sessionId: string): Promise<void> {
   const { error } = await getAdmin()
     .from('genid_sessions')
-    .update({ status: 'active' })
+    .update({ status: 'active', finalizing_since: null })
     .eq('id', sessionId)
     .eq('status', 'finalizing')
 

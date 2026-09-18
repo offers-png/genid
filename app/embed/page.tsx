@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
+import Link from 'next/link'
 import Image from 'next/image'
 
-type Status = 'idle' | 'uploading' | 'success' | 'error'
+type Status = 'checking_auth' | 'signed_out' | 'idle' | 'uploading' | 'success' | 'error'
 
 interface EmbedResult {
   genidCode: string
@@ -14,13 +15,23 @@ interface EmbedResult {
 }
 
 export default function EmbedPage() {
-  const [email, setEmail] = useState('')
   const [image, setImage] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
-  const [status, setStatus] = useState<Status>('idle')
+  const [status, setStatus] = useState<Status>('checking_auth')
   const [result, setResult] = useState<EmbedResult | null>(null)
   const [error, setError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/auth/me').then((res) => {
+      if (cancelled) return
+      setStatus(res.ok ? 'idle' : 'signed_out')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -50,14 +61,13 @@ export default function EmbedPage() {
 
   async function handleEmbed(e: React.FormEvent) {
     e.preventDefault()
-    if (!image || !email) return
+    if (!image) return
 
     setStatus('uploading')
     setError('')
 
     try {
       const formData = new FormData()
-      formData.append('email', email)
       formData.append('image', image)
 
       const res = await fetch('/api/embed', {
@@ -98,21 +108,19 @@ export default function EmbedPage() {
         </p>
       </div>
 
-      {status !== 'success' && (
-        <form onSubmit={handleEmbed} className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Your Registered Email</label>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-violet-500 transition-colors"
-            />
-            <p className="text-xs text-gray-500 mt-1">Must match your registered GENID email</p>
-          </div>
+      {status === 'checking_auth' && <div className="text-gray-500 text-sm">Loading…</div>}
 
+      {status === 'signed_out' && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
+          <p className="text-gray-400 mb-4">Sign in to stamp an image.</p>
+          <Link href="/login" className="bg-violet-600 hover:bg-violet-500 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-block">
+            Sign in →
+          </Link>
+        </div>
+      )}
+
+      {status !== 'success' && status !== 'checking_auth' && status !== 'signed_out' && (
+        <form onSubmit={handleEmbed} className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">AI-Generated Image</label>
             <div
@@ -151,7 +159,7 @@ export default function EmbedPage() {
 
           <button
             type="submit"
-            disabled={!image || !email || status === 'uploading'}
+            disabled={!image || status === 'uploading'}
             className="w-full bg-violet-600 hover:bg-violet-500 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white py-3 rounded-lg font-medium transition-colors"
           >
             {status === 'uploading' ? (

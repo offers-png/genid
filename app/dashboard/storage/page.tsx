@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 
 interface SessionUsage {
@@ -16,37 +16,44 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
+type LoadState = 'loading' | 'signed_out' | 'ready' | 'error'
+
 export default function StoragePage() {
-  const [email, setEmail] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [state, setState] = useState<LoadState>('loading')
   const [totalBytes, setTotalBytes] = useState<number | null>(null)
   const [sessions, setSessions] = useState<SessionUsage[]>([])
   const [error, setError] = useState('')
 
-  async function handleLookup(e: React.FormEvent) {
-    e.preventDefault()
-    setLoading(true)
-    setError('')
-    setTotalBytes(null)
-    setSessions([])
+  useEffect(() => {
+    let cancelled = false
 
-    try {
-      const res = await fetch(`/api/session/storage-summary?email=${encodeURIComponent(email)}`)
-      const data = await res.json()
+    async function load() {
+      try {
+        const res = await fetch('/api/session/storage-summary')
+        if (res.status === 401) {
+          if (!cancelled) setState('signed_out')
+          return
+        }
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error ?? 'Lookup failed.')
 
-      if (!res.ok) {
-        setError(data.error ?? 'Lookup failed.')
-        setLoading(false)
-        return
+        if (cancelled) return
+        setTotalBytes(data.totalBytes)
+        setSessions(data.sessions ?? [])
+        setState('ready')
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Network error — please try again')
+          setState('error')
+        }
       }
-
-      setTotalBytes(data.totalBytes)
-      setSessions(data.sessions ?? [])
-    } catch {
-      setError('Network error — please try again')
     }
-    setLoading(false)
-  }
+
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const maxBytes = Math.max(1, ...sessions.map(s => s.bytes))
 
@@ -62,25 +69,18 @@ export default function StoragePage() {
         </Link>
       </div>
 
-      <form onSubmit={handleLookup} className="flex gap-3 mb-10">
-        <input
-          type="email"
-          required
-          value={email}
-          onChange={e => setEmail(e.target.value)}
-          placeholder="you@example.com"
-          className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-violet-500 transition-colors"
-        />
-        <button
-          type="submit"
-          disabled={loading}
-          className="bg-violet-600 hover:bg-violet-500 disabled:bg-violet-800 text-white px-6 py-3 rounded-lg font-medium transition-colors whitespace-nowrap"
-        >
-          {loading ? 'Loading...' : 'Check Usage'}
-        </button>
-      </form>
+      {state === 'loading' && <div className="text-gray-500 text-sm">Loading…</div>}
 
-      {error && (
+      {state === 'signed_out' && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
+          <p className="text-gray-400 mb-4">Sign in to view your storage usage.</p>
+          <Link href="/login" className="bg-violet-600 hover:bg-violet-500 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-block">
+            Sign in →
+          </Link>
+        </div>
+      )}
+
+      {state === 'error' && (
         <div className="bg-red-950/50 border border-red-800 rounded-lg p-4 text-sm text-red-300 mb-6">{error}</div>
       )}
 

@@ -1,5 +1,7 @@
-import { notFound } from 'next/navigation'
+import { cookies } from 'next/headers'
+import { notFound, redirect } from 'next/navigation'
 import { getSession, getSessionSteps, getCertificateForSession } from '@/lib/supabase'
+import { resolveSessionCookie, SESSION_COOKIE_NAME } from '@/lib/auth'
 import { downloadFromSessionBucket } from '@/lib/storage'
 import SessionWorkspace, { type StepView } from '../SessionWorkspace'
 
@@ -8,11 +10,21 @@ import SessionWorkspace, { type StepView } from '../SessionWorkspace'
 // that created it. Loads everything server-side (including each step's
 // image, base64-encoded here rather than served through a separate route)
 // and hands it to the same workspace component the creation flow uses.
+//
+// A session's own URL used to be enough to view it — no ownership check at
+// all (Security & Trust Fix Punch List #4, Sept 18 follow-up). Not signed
+// in redirects to /login; signed in as someone else's identity 404s rather
+// than confirming the session exists for a non-owner.
 export default async function SessionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: sessionId } = await params
 
+  const cookieStore = await cookies()
+  const caller = await resolveSessionCookie(cookieStore.get(SESSION_COOKIE_NAME)?.value)
+  if (!caller) redirect('/login')
+
   const session = await getSession(sessionId)
   if (!session) notFound()
+  if (session.genid_code !== caller.genid_code) notFound()
 
   const steps = await getSessionSteps(sessionId)
 

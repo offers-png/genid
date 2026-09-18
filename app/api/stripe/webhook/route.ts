@@ -24,23 +24,48 @@ export async function POST(req: NextRequest) {
       // The certificate displays user_name as "Verified AI content created
       // by {name}" — that claim is only true if the name came from Stripe's
       // document check, not from whatever the registrant self-reported at
-      // signup. Overwrite user_name with the verified name when Stripe
-      // provides one; otherwise leave it as the self-reported value.
+      // signup. name_verified makes that distinction explicit and durable
+      // (Punch List #2 follow-up) instead of implicit in "did user_name
+      // happen to get overwritten" — every branch below sets it, on
+      // purpose, rather than leaving it to whatever it defaulted to.
       const verifiedOutputs = session.verified_outputs
       const verifiedName = [verifiedOutputs?.first_name, verifiedOutputs?.last_name]
         .filter(Boolean)
         .join(' ')
         .trim()
 
-      await supabaseAdmin
-        .from('genid_registry')
-        .update({
-          verified: true,
-          verification_status: 'verified',
-          stripe_verification_id: session.id,
-          ...(verifiedName ? { user_name: verifiedName } : {}),
-        })
-        .eq('email', email)
+      if (verifiedName) {
+        await supabaseAdmin
+          .from('genid_registry')
+          .update({
+            verified: true,
+            verification_status: 'verified',
+            stripe_verification_id: session.id,
+            user_name: verifiedName,
+            name_verified: true,
+          })
+          .eq('email', email)
+      } else {
+        // Stripe confirmed identity but this verification flow returned no
+        // name in verified_outputs (happens for some document/flow
+        // combinations) — identity is verified, but the DISPLAY NAME is
+        // still whatever the registrant typed. Leave user_name untouched
+        // and explicitly mark it unverified rather than silently letting
+        // the self-reported value keep riding on `verified: true`.
+        console.warn(
+          `Stripe verification ${session.id} for ${email} succeeded with no verified_outputs name — ` +
+            'user_name stays self-reported and name_verified is set to false.'
+        )
+        await supabaseAdmin
+          .from('genid_registry')
+          .update({
+            verified: true,
+            verification_status: 'verified',
+            stripe_verification_id: session.id,
+            name_verified: false,
+          })
+          .eq('email', email)
+      }
 
       return NextResponse.json({ received: true })
     }

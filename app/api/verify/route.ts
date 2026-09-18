@@ -53,34 +53,53 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Best-effort content-log lookup against the stamped-image hash for
-    // blockchain TX + canonical stamp time. Falls back to embedded timestamp.
+    // Look up the authenticated content record for THESE EXACT UPLOADED
+    // BYTES (content_hash is a full-file SHA-256, written once at stamp
+    // time in /api/embed and never touched again). This is the actual
+    // content-binding check: signatureValid alone only proves the payload
+    // embedded INSIDE the uploaded file is internally self-consistent —
+    // it says nothing about whether the file's own bytes are what was
+    // originally issued. LSB steganography only touches a handful of
+    // low-order bits; an attacker who preserves those specific bits while
+    // altering everything else in the image would still extract a
+    // perfectly valid, correctly-signed payload from a picture that no
+    // longer matches what was actually notarized. Requiring an exact
+    // content_hash match (plus the embedded hash/timestamp lining up with
+    // what was logged, not just with each other) closes that gap.
     const { data: logEntry } = await supabaseAdmin
       .from('genid_content_log')
       .select('*')
       .eq('content_hash', contentHash)
       .single()
 
+    const contentMatchesRecord =
+      !!logEntry &&
+      logEntry.genid_code === extracted.code &&
+      logEntry.notary_hash === extracted.hash &&
+      logEntry.notary_timestamp === extracted.timestamp
+
     const stampedAt =
       logEntry?.created_at ??
       (extracted.timestamp ? new Date(extracted.timestamp * 1000).toISOString() : null)
 
-    // A GENID code being registered proves nothing about THIS image — only
-    // a valid notary signature over the embedded hash does. Without that
-    // check, a tampered or unsigned image carrying someone else's code
-    // would come back "verified" just because the code exists.
-    const verified = signaturePresent && signatureValid
+    const verified = signaturePresent && signatureValid && contentMatchesRecord
+    const nameVerified = record.name_verified ?? false
     const message = verified
-      ? `Verified AI content created by ${record.user_name} (${record.genid_code})`
-      : signaturePresent
-        ? 'GENID code found and registered, but the embedded signature does not match this image. This content may have been tampered with.'
-        : 'GENID code found and registered, but this image has no embedded notary signature to verify. Authenticity cannot be confirmed.'
+      ? nameVerified
+        ? `Verified AI content created by ${record.user_name} (${record.genid_code})`
+        : `Verified AI content under GENID ${record.genid_code} — the creator's identity was ID-verified, but the display name "${record.user_name}" is self-reported, not confirmed by that ID document.`
+      : !signaturePresent
+        ? 'GENID code found and registered, but this image has no embedded notary signature to verify. Authenticity cannot be confirmed.'
+        : !signatureValid
+          ? 'GENID code found and registered, but the embedded signature does not match this image. This content may have been tampered with.'
+          : 'The embedded signature is internally consistent, but no authenticated record exists for these exact file bytes. This may be a copy, re-save, or partial modification of a previously stamped image — not the original stamped file.'
 
     return NextResponse.json({
       verified,
       genidCode: record.genid_code,
       creatorName: record.user_name,
       identityVerified: record.verified,
+      nameVerified,
       registeredAt: record.created_at,
       contentHash,
       blockchainTxHash: logEntry?.blockchain_tx_hash ?? null,
@@ -88,6 +107,7 @@ export async function POST(req: NextRequest) {
       platform: logEntry?.platform ?? 'GENID Protocol',
       signaturePresent,
       signatureValid,
+      contentMatchesRecord,
       embeddedHash: extracted.hash ?? null,
       message,
     })
