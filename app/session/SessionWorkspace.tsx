@@ -16,8 +16,9 @@ export interface StepView {
   userNote: string | null
   outputHash: string
   stepSignature: string
-  mimeType: string
-  imageBase64: string
+  // Served lazily via /api/session/[id]/step/[stepId]/image rather than
+  // embedded as base64 — see app/session/[id]/page.tsx.
+  imageUrl: string
 }
 
 export interface CertificateView {
@@ -101,8 +102,7 @@ export default function SessionWorkspace({
         userNote: (body.userNote as string) ?? null,
         outputHash: data.outputHash,
         stepSignature: data.stepSignature,
-        mimeType: data.mimeType,
-        imageBase64: data.imageBase64,
+        imageUrl: `/api/session/${sessionId}/step/${data.stepId}/image`,
       }
       setSteps(prev => [...prev, step])
       setViewingStepId(step.id)
@@ -213,7 +213,8 @@ export default function SessionWorkspace({
         <div className="space-y-6">
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5">
             <Image
-              src={`data:${viewingStep.mimeType};base64,${viewingStep.imageBase64}`}
+              key={viewingStep.id}
+              src={viewingStep.imageUrl}
               alt={`Step ${viewingStep.stepNumber} output`}
               width={512}
               height={512}
@@ -252,11 +253,12 @@ export default function SessionWorkspace({
                   }`}
                 >
                   <Image
-                    src={`data:${step.mimeType};base64,${step.imageBase64}`}
+                    src={step.imageUrl}
                     alt={`Step ${step.stepNumber}`}
                     width={64}
                     height={64}
                     unoptimized
+                    loading="lazy"
                     className="w-16 h-16 object-cover"
                   />
                   {step.id === finalStepId && (

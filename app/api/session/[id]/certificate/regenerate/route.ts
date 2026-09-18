@@ -66,6 +66,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const pdfBuffer = await generateCertificatePdf({
       genidCode: session.genid_code,
       creatorName: record.user_name,
+      nameVerified: record.name_verified ?? false,
       sessionId: session.id,
       totalSteps: steps.length,
       totalDurationSeconds,

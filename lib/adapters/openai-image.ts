@@ -27,6 +27,12 @@ export const openAiImageAdapter: ModelAdapter = {
         size: '1024x1024',
         n: 1,
       }),
+      // Actually aborts the outbound request past this point, rather than
+      // just walking away from a promise that keeps running in the
+      // background — the caller also races this against its own timeout
+      // (lib/limits.ts withTimeout), but that alone never cancels the
+      // underlying fetch.
+      signal: AbortSignal.timeout(60_000),
     })
     const responseTimestamp = new Date()
 

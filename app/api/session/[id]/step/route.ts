@@ -1,12 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSession, getSessionSteps, createStep } from '@/lib/supabase'
+import { getSession, getSessionSteps, createStepIfActive, isSessionNotActiveError, countRecentGenerationsForGenid } from '@/lib/supabase'
 import { getAuthenticatedRecord } from '@/lib/auth'
 import { uploadToSessionBucket, downloadFromSessionBucket, stepStoragePath } from '@/lib/storage'
 import { hashBuffer } from '@/lib/steganography'
 import { buildStepContent, computeStepHash, signStepHash } from '@/lib/chain'
 import { openAiImageAdapter } from '@/lib/adapters/openai-image'
-import { applyCrop, applyColorAdjust } from '@/lib/edits'
+import { applyCrop, applyColorAdjust, validateCropParams, validateColorAdjustParams } from '@/lib/edits'
 import { env } from '@/lib/env'
+import {
+  validatePromptText,
+  ValidationError,
+  GENERATION_RATE_LIMIT,
+  GENERATION_RATE_WINDOW_MS,
+  withTimeout,
+  EXTERNAL_CALL_TIMEOUT_MS,
+} from '@/lib/limits'
 
 const adapter = openAiImageAdapter
 
@@ -60,11 +68,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     let modelRequestId: string | null = null
 
     if (action === 'regenerate') {
-      const nextPrompt = body.promptText as string | undefined
-      if (!nextPrompt) {
-        return NextResponse.json({ error: 'promptText is required for regenerate' }, { status: 400 })
+      let nextPrompt: string
+      try {
+        nextPrompt = validatePromptText(body.promptText)
+      } catch (err) {
+        if (err instanceof ValidationError) return NextResponse.json({ error: err.message }, { status: 400 })
+        throw err
       }
-      const generation = await adapter.generateImage({ promptText: nextPrompt })
+
+      // Every regenerate calls a paid external model API.
+      const recentGenerations = await countRecentGenerationsForGenid(caller.genid_code, GENERATION_RATE_WINDOW_MS)
+      if (recentGenerations >= GENERATION_RATE_LIMIT) {
+        return NextResponse.json(
+          { error: `Rate limit exceeded: max ${GENERATION_RATE_LIMIT} generations per ${GENERATION_RATE_WINDOW_MS / 60000} minutes. Please wait and try again.` },
+          { status: 429 }
+        )
+      }
+
+      const generation = await withTimeout(adapter.generateImage({ promptText: nextPrompt }), EXTERNAL_CALL_TIMEOUT_MS, 'Image generation')
       outputBuffer = generation.outputBuffer
       mimeType = generation.mimeType
       ext = generation.ext
@@ -79,6 +100,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
       if (!priorStep.output_storage_path) {
         return NextResponse.json({ error: 'Prior step has no stored output to edit' }, { status: 400 })
+      }
+      try {
+        if (requestedEditType === 'crop') validateCropParams(body.params)
+        else validateColorAdjustParams(body.params)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Invalid edit params'
+        return NextResponse.json({ error: message }, { status: 400 })
       }
       const sourceBuffer = await downloadFromSessionBucket(priorStep.output_storage_path)
       outputBuffer =
@@ -128,26 +156,44 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const stepHash = computeStepHash(stepContent, priorStep.step_signature)
     const stepSignature = signStepHash(stepHash, env.genidSigningSecret)
 
-    const step = await createStep({
-      session_id: sessionId,
-      step_number: nextStepNumber,
-      step_type: stepType,
-      edit_type: editType,
-      prompt_text: promptText,
-      model_used: modelUsed,
-      model_request_id: modelRequestId,
-      request_timestamp: requestTimestamp.toISOString(),
-      response_timestamp: responseTimestamp.toISOString(),
-      output_storage_path: storagePath,
-      output_hash: outputHash,
-      prior_step_signature: priorStep.step_signature,
-      step_hash: stepHash,
-      step_signature: stepSignature,
-      user_note: userNote ?? null,
-      auto_suggested_note: null,
-      is_final_selection: false,
-    })
+    // Checks the session is still 'active' and inserts the step inside one
+    // Postgres transaction (migration 010) — closes the race where this
+    // request's slow external generation call above could otherwise let a
+    // concurrent finalize flip the session to 'finalizing' and read/hash
+    // the step list before this insert lands.
+    let step
+    try {
+      step = await createStepIfActive({
+        session_id: sessionId,
+        step_number: nextStepNumber,
+        step_type: stepType,
+        edit_type: editType,
+        prompt_text: promptText,
+        model_used: modelUsed,
+        model_request_id: modelRequestId,
+        request_timestamp: requestTimestamp.toISOString(),
+        response_timestamp: responseTimestamp.toISOString(),
+        output_storage_path: storagePath,
+        output_hash: outputHash,
+        prior_step_signature: priorStep.step_signature,
+        step_hash: stepHash,
+        step_signature: stepSignature,
+        user_note: userNote ?? null,
+        auto_suggested_note: null,
+        is_final_selection: false,
+      })
+    } catch (err: unknown) {
+      if (isSessionNotActiveError(err)) {
+        return NextResponse.json(
+          { error: 'This session started finalizing while this request was in progress — the new output was discarded.' },
+          { status: 409 }
+        )
+      }
+      throw err
+    }
 
+    // No imageBase64 here — see the matching comment in
+    // POST /api/session for why (the client fetches the image by URL).
     return NextResponse.json({
       stepId: step.id,
       stepNumber: step.step_number,
@@ -155,8 +201,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       editType: step.edit_type,
       outputHash,
       stepSignature,
-      mimeType,
-      imageBase64: outputBuffer.toString('base64'),
     })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Step creation failed'
