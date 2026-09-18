@@ -233,6 +233,8 @@ import { POST as stepRoute } from '@/app/api/session/[id]/step/route'
 import { POST as finalizeRoute } from '@/app/api/session/[id]/finalize/route'
 import { GET as certificateRoute } from '@/app/api/session/[id]/certificate/route'
 import { GET as verifyRoute } from '@/app/api/session/[id]/verify/route'
+import { stampOnBlockchain } from '@/lib/blockchain'
+import { uploadToSessionBucket } from '@/lib/storage'
 
 function jsonRequest(url: string, body: unknown) {
   return new NextRequest(url, {
@@ -327,5 +329,72 @@ describe('End-to-end: generate -> edit -> finalize -> download -> verify', () =>
     const archivedStepResult = verifyBody.steps.find((s: { stepNumber: number }) => s.stepNumber === 1)
     expect(archivedStepResult.fileArchived).toBe(true)
     expect(archivedStepResult.archiveIntegrityValid).toBe(true)
+  })
+
+  // Exercises the recovery path the finalize route's own comments describe:
+  // finalizeSession() commits the session to 'finalized' BEFORE the
+  // certificate PDF is generated/uploaded, specifically so that a failure
+  // in that later step (here: a storage write failure uploading the PDF)
+  // leaves a session that's finalized but has no certificate yet — and a
+  // retry of the same finalize call must recover it without re-picking the
+  // final step, re-anchoring on Polygon, or duplicating the transaction.
+  it('recovers from a failed certificate publish on retry, without re-anchoring or duplicating the blockchain transaction', async () => {
+    const generateRes = await createSessionRoute(jsonRequest('http://localhost/api/session', { promptText: 'a dog in a raincoat' }))
+    expect(generateRes.status).toBe(200)
+    const { sessionId, stepId } = await generateRes.json()
+
+    const blockchainCallsBefore = vi.mocked(stampOnBlockchain).mock.calls.length
+
+    // --- 1. First finalize attempt: the certificate PDF upload fails ---
+    vi.mocked(uploadToSessionBucket).mockImplementationOnce(async () => {
+      throw new Error('storage write failed (simulated transient outage)')
+    })
+
+    const firstAttempt = await finalizeRoute(
+      jsonRequest(`http://localhost/api/session/${sessionId}/finalize`, { stepId }),
+      { params: Promise.resolve({ id: sessionId }) }
+    )
+    expect(firstAttempt.status).toBe(500)
+
+    // The session must already be committed 'finalized' — that's the whole
+    // point of finalizeSession() running before the PDF work — with the
+    // Polygon anchor recorded, but with no certificate row yet.
+    const sessionAfterFailure = sessions.get(sessionId)!
+    expect(sessionAfterFailure.status).toBe('finalized')
+    expect(sessionAfterFailure.final_step_id).toBe(stepId)
+    expect(sessionAfterFailure.polygon_anchor_tx).toBeTruthy()
+    expect([...certificates.values()].find((c) => c.session_id === sessionId)).toBeUndefined()
+    expect(vi.mocked(stampOnBlockchain).mock.calls.length).toBe(blockchainCallsBefore + 1)
+
+    // --- 2. Retry: same finalize call, this time storage succeeds ---
+    const retryAttempt = await finalizeRoute(
+      jsonRequest(`http://localhost/api/session/${sessionId}/finalize`, { stepId }),
+      { params: Promise.resolve({ id: sessionId }) }
+    )
+    const retryBody = await retryAttempt.json()
+    expect(retryAttempt.status, JSON.stringify(retryBody)).toBe(200)
+    // Same anchor as the first attempt recorded — the retry must reuse it,
+    // not call the blockchain a second time for the same content.
+    expect(retryBody.polygonAnchorTx).toBe(sessionAfterFailure.polygon_anchor_tx)
+    expect(vi.mocked(stampOnBlockchain).mock.calls.length).toBe(blockchainCallsBefore + 1)
+
+    // --- 3. Download the certificate the retry published ---
+    const downloadRes = await certificateRoute(
+      new NextRequest(`http://localhost/api/session/${sessionId}/certificate`),
+      { params: Promise.resolve({ id: sessionId }) }
+    )
+    expect(downloadRes.status).toBe(200)
+    const pdfBytes = Buffer.from(await downloadRes.arrayBuffer())
+    expect(pdfBytes.subarray(0, 4).toString('latin1')).toBe('%PDF')
+
+    // --- 4. Public verification still comes back fully valid ---
+    const verifyRes = await verifyRoute(new NextRequest(`http://localhost/api/session/${sessionId}/verify`), {
+      params: Promise.resolve({ id: sessionId }),
+    })
+    const verifyBody = await verifyRes.json()
+    expect(verifyRes.status, JSON.stringify(verifyBody)).toBe(200)
+    expect(verifyBody.finalized).toBe(true)
+    expect(verifyBody.overallValid).toBe(true)
+    expect(verifyBody.polygonStatus).toBe('confirmed')
   })
 })
