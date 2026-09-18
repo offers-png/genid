@@ -57,7 +57,9 @@ import {
 } from '@/lib/supabase'
 import { generateCertificatePdf, buildCertificateSteps } from '@/lib/certificate'
 import { stampOnBlockchain } from '@/lib/blockchain'
+import { computeSessionRootHash } from '@/lib/chain'
 import { archiveNonFinalSteps } from '@/lib/lifecycle'
+import { uploadToSessionBucket } from '@/lib/storage'
 import { POST } from '@/app/api/session/[id]/finalize/route'
 
 const SESSION_ID = 'session-1'
@@ -97,6 +99,7 @@ function fakeSession(overrides: Partial<SessionRecord> = {}): SessionRecord {
     final_step_id: null,
     session_root_hash: null,
     polygon_anchor_tx: null,
+    polygon_anchor_root_hash: null,
     identity_verification_tier: 'id_verified',
     c2pa_manifest_id: null,
     created_at: new Date().toISOString(),
@@ -252,13 +255,20 @@ describe('POST /api/session/[id]/finalize — concurrency and lock recovery (Pun
     expect(abortFinalizing).not.toHaveBeenCalled()
   })
 
-  it('stops and does not commit a step/certificate when finalizeSession reports the lock was superseded', async () => {
+  it('stops before publishing ANYTHING when finalizeSession reports the lock was superseded (Sept 18 third follow-up — "only the winner publishes")', async () => {
     vi.mocked(getSession).mockResolvedValue(fakeSession({ status: 'active' }))
     vi.mocked(tryBeginFinalizing).mockResolvedValue({ acquired: true, token: 'token-c' })
     vi.mocked(finalizeSession).mockResolvedValue(false) // token no longer matches — lost the lock
 
     const res = await call()
     expect(res.status).toBe(409)
+    // The losing request must never generate or publish the certificate
+    // PDF or C2PA export — those checks now happen BEFORE any of this
+    // runs, specifically so a superseded request can't overwrite a
+    // winning request's already-published files at the same fixed paths.
+    expect(buildCertificateSteps).not.toHaveBeenCalled()
+    expect(generateCertificatePdf).not.toHaveBeenCalled()
+    expect(uploadToSessionBucket).not.toHaveBeenCalled()
     expect(markStepFinal).not.toHaveBeenCalled()
     expect(createCertificate).not.toHaveBeenCalled()
     // Not our lock anymore — must not attempt to release someone else's.
@@ -271,6 +281,88 @@ describe('POST /api/session/[id]/finalize — concurrency and lock recovery (Pun
 
     const res = await call()
     expect(res.status).toBe(200)
-    expect(recordPolygonAnchorTx).toHaveBeenCalledWith(SESSION_ID, 'token-d', '0xabc')
+    expect(recordPolygonAnchorTx).toHaveBeenCalledWith(SESSION_ID, 'token-d', '0xabc', 'computed-root-hash')
+  })
+})
+
+describe('POST /api/session/[id]/finalize — anchor content binding (Sept 18 third follow-up)', () => {
+  beforeEach(() => {
+    vi.mocked(getAuthenticatedRecord).mockResolvedValue(fakeOwner())
+    // Content-dependent, not a fixed string — lets this suite tell a
+    // 1-step root hash apart from a 2-step one, the way the real
+    // computeSessionRootHash tells different step lists apart.
+    vi.mocked(computeSessionRootHash).mockImplementation((sigs: string[]) => `root(${sigs.join(',')})`)
+  })
+
+  it('a failed finalization followed by an edit does NOT reuse the old anchor for the new content', async () => {
+    const stepBefore = { ...fakeStep, id: 'step-1', step_signature: 'sig-1' }
+    const stepAfterEdit = { ...fakeStep, id: 'step-2', step_number: 2, step_signature: 'sig-2' }
+
+    // --- Attempt 1: anchors successfully, then fails before committing ---
+    vi.mocked(getSession).mockResolvedValueOnce(
+      fakeSession({ status: 'active', polygon_anchor_tx: null, polygon_anchor_root_hash: null })
+    )
+    vi.mocked(getSessionSteps).mockResolvedValueOnce([stepBefore])
+    vi.mocked(tryBeginFinalizing).mockResolvedValueOnce({ acquired: true, token: 'token-1' })
+    vi.mocked(stampOnBlockchain).mockResolvedValueOnce({ txHash: '0xOLD', network: 'polygon', blockNumber: 1, timestamp: Date.now() })
+    // Simulate the failure happening between a successful anchor and the
+    // commit (e.g. a DB blip on the finalizeSession call itself) — the
+    // lock reverts to 'active' via abortFinalizing, but the anchor tx
+    // already persisted via recordPolygonAnchorTx survives that revert.
+    vi.mocked(finalizeSession).mockRejectedValueOnce(new Error('DB blip'))
+
+    const firstRes = await call()
+    expect(firstRes.status).toBe(500)
+    expect(recordPolygonAnchorTx).toHaveBeenCalledWith(SESSION_ID, 'token-1', '0xOLD', 'root(sig-1)')
+    expect(abortFinalizing).toHaveBeenCalledWith(SESSION_ID, 'token-1')
+
+    // --- An edit lands: session is 'active' again with a NEW step ---
+    vi.mocked(getSession).mockResolvedValueOnce(
+      fakeSession({
+        status: 'active',
+        // What attempt 1's recordPolygonAnchorTx call actually persisted:
+        polygon_anchor_tx: '0xOLD',
+        polygon_anchor_root_hash: 'root(sig-1)',
+      })
+    )
+    vi.mocked(getSessionSteps).mockResolvedValueOnce([stepBefore, stepAfterEdit])
+    vi.mocked(tryBeginFinalizing).mockResolvedValueOnce({ acquired: true, token: 'token-2' })
+    vi.mocked(stampOnBlockchain).mockResolvedValueOnce({ txHash: '0xNEW', network: 'polygon', blockNumber: 2, timestamp: Date.now() })
+    vi.mocked(finalizeSession).mockResolvedValueOnce(true)
+
+    const secondRes = await call()
+    const secondBody = await secondRes.json()
+
+    expect(secondRes.status).toBe(200)
+    // The root hash changed (an edit landed), so the old anchor must NOT
+    // be reused — a fresh anchor for the NEW content must be submitted...
+    expect(stampOnBlockchain).toHaveBeenCalledTimes(2)
+    expect(recordPolygonAnchorTx).toHaveBeenCalledWith(SESSION_ID, 'token-2', '0xNEW', 'root(sig-1,sig-2)')
+    // ...and the certificate must reflect the NEW anchor, never the stale one.
+    expect(secondBody.polygonAnchorTx).toBe('0xNEW')
+    expect(finalizeSession).toHaveBeenCalledWith(SESSION_ID, expect.anything(), 'root(sig-1,sig-2)', '0xNEW', 'token-2')
+  })
+
+  it('DOES reuse the anchor on a same-content retry (no edit happened) — no duplicate transaction', async () => {
+    const step = { ...fakeStep, id: 'step-1', step_signature: 'sig-1' }
+
+    vi.mocked(getSession).mockResolvedValue(
+      fakeSession({
+        status: 'active',
+        polygon_anchor_tx: '0xEXISTING',
+        polygon_anchor_root_hash: 'root(sig-1)',
+      })
+    )
+    vi.mocked(getSessionSteps).mockResolvedValue([step])
+    vi.mocked(tryBeginFinalizing).mockResolvedValue({ acquired: true, token: 'token-3' })
+    vi.mocked(finalizeSession).mockResolvedValue(true)
+
+    const res = await call()
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(stampOnBlockchain).not.toHaveBeenCalled()
+    expect(recordPolygonAnchorTx).not.toHaveBeenCalled()
+    expect(body.polygonAnchorTx).toBe('0xEXISTING')
   })
 })

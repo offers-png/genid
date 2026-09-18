@@ -63,6 +63,7 @@ Run the migrations, in order, in your Supabase SQL editor:
 # supabase/migrations/008_archive_integrity.sql
 # supabase/migrations/009_auth_and_lock_recovery.sql
 # supabase/migrations/010_step_finalize_race_and_lock_ownership.sql
+# supabase/migrations/011_anchor_content_binding.sql
 # Paste each into Supabase Dashboard → SQL Editor and run in order.
 ```
 
@@ -110,11 +111,18 @@ route), `/api/verify` content binding (a valid signature alone isn't enough
 — the uploaded bytes have to match an authenticated content record),
 finalize concurrency and lock recovery (crash/stale-lock reclaim, lock
 ownership tokens, missing-timestamp handling, lock release on validation
-failure), Stripe verified-name binding, archive signature binding
-(session/step/hash-bound, tamper and cross-step replay rejected), archive
-recoverability (upload-then-commit-then-delete ordering; a DB failure never
-deletes the original), and embed content-log-failure handling (a stamped
-image is never returned unless its verification record actually saved).
+failure), a losing finalize request never publishing the certificate/C2PA
+export (only the request that wins the token-gated commit generates or
+uploads anything), a failed-finalize-then-edit not reusing a stale Polygon
+anchor for content it never actually anchored, Stripe verified-name
+binding, archive signature binding (session/step/hash-bound, tamper and
+cross-step replay rejected), archive recoverability
+(upload-then-commit-then-delete ordering; a DB failure never deletes the
+original), embed content-log-failure handling (a stamped image is never
+returned unless its verification record actually saved), and one complete
+generate → edit → finalize → download → verify flow driven through the
+real route handlers and real hash-chaining/PDF/verification logic end to
+end (`tests/e2e-generate-edit-finalize-verify.test.ts`).
 
 `tests/integration/*.integration.test.ts` run against a real embedded
 Postgres ([PGlite](https://pglite.dev), no Docker required) executing the
@@ -167,7 +175,13 @@ true multi-connection concurrency.
   token so a slow-but-alive request can't clobber a lock that's since been
   reclaimed as stale — migration 010) and against a step landing after the
   session's root hash was already computed (`create_step_if_session_active`,
-  migration 010) — see `lib/supabase.ts`.
+  migration 010) — see `lib/supabase.ts`. Only the request that wins the
+  token-gated commit generates or uploads the certificate PDF/C2PA export;
+  a superseded request stops before publishing anything. A Polygon anchor
+  is only reused across a retry when it still matches the current content
+  (`polygon_anchor_root_hash`, migration 011) — a failed finalize followed
+  by an edit re-anchors instead of presenting a stale transaction as if it
+  covered the new content.
 - Prompts, edit parameters, and uploads are size/dimension-validated, model
   generation is rate-limited per identity, and external calls (model
   provider, Polygon RPC) are time-bounded — see `lib/limits.ts`.

@@ -95,6 +95,7 @@ export interface SessionRecord {
   final_step_id: string | null
   session_root_hash: string | null
   polygon_anchor_tx: string | null
+  polygon_anchor_root_hash: string | null
   identity_verification_tier: string | null
   c2pa_manifest_id: string | null
   created_at: string
@@ -241,20 +242,31 @@ export async function abortFinalizing(sessionId: string, token: string): Promise
 // the final finalizeSession() commit, which can be minutes later once C2PA
 // embedding and PDF generation finish) so a retry — even one that reclaimed
 // this request's lock after a crash — sees polygon_anchor_tx already set on
-// its next getSession() read and skips submitting a second on-chain
-// transaction for the same root hash. Token-scoped: if the lock has since
-// been reclaimed, this write is dropped (0 rows), which is correct — the
-// new holder does its own anchor and will persist its own tx.
+// its next getSession() read and can decide whether to reuse it. Token-scoped:
+// if the lock has since been reclaimed, this write is dropped (0 rows),
+// which is correct — the new holder does its own anchor and will persist
+// its own tx.
+//
+// rootHash is stored alongside the tx (polygon_anchor_root_hash) so a later
+// read can tell whether this anchor still matches the content it's about
+// to finalize — a failed attempt followed by an edit changes the step list,
+// and so the root hash, and a stale anchor for the OLD root hash must never
+// be presented as if it covers the new content (Sept 18 third follow-up).
 //
 // Also refreshes finalizing_since as a heartbeat: a finalize call that's
 // genuinely still progressing (not stuck) shouldn't have its lock stolen by
 // tryReclaimStaleFinalizing just because the remaining work (PDF/C2PA) is
 // taking a while — a real anchor transaction landing is solid evidence the
 // process is alive.
-export async function recordPolygonAnchorTx(sessionId: string, token: string, txHash: string): Promise<boolean> {
+export async function recordPolygonAnchorTx(
+  sessionId: string,
+  token: string,
+  txHash: string,
+  rootHash: string
+): Promise<boolean> {
   const { data, error } = await getAdmin()
     .from('genid_sessions')
-    .update({ polygon_anchor_tx: txHash, finalizing_since: new Date().toISOString() })
+    .update({ polygon_anchor_tx: txHash, polygon_anchor_root_hash: rootHash, finalizing_since: new Date().toISOString() })
     .eq('id', sessionId)
     .eq('status', 'finalizing')
     .eq('finalizing_lock_token', token)

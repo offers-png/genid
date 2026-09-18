@@ -39,6 +39,7 @@ function fakeSession(): SessionRecord {
     final_step_id: 'step-final',
     session_root_hash: 'root-hash',
     polygon_anchor_tx: null,
+    polygon_anchor_root_hash: null,
     identity_verification_tier: 'id_verified',
     c2pa_manifest_id: null,
     created_at: new Date().toISOString(),
