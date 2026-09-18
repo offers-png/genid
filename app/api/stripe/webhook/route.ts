@@ -21,12 +21,24 @@ export async function POST(req: NextRequest) {
       const email = session.metadata?.email
       if (!email) return NextResponse.json({ received: true })
 
+      // The certificate displays user_name as "Verified AI content created
+      // by {name}" — that claim is only true if the name came from Stripe's
+      // document check, not from whatever the registrant self-reported at
+      // signup. Overwrite user_name with the verified name when Stripe
+      // provides one; otherwise leave it as the self-reported value.
+      const verifiedOutputs = session.verified_outputs
+      const verifiedName = [verifiedOutputs?.first_name, verifiedOutputs?.last_name]
+        .filter(Boolean)
+        .join(' ')
+        .trim()
+
       await supabaseAdmin
         .from('genid_registry')
         .update({
           verified: true,
           verification_status: 'verified',
           stripe_verification_id: session.id,
+          ...(verifiedName ? { user_name: verifiedName } : {}),
         })
         .eq('email', email)
 

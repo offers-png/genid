@@ -8,6 +8,8 @@ import {
   createCertificate,
   setSessionC2paManifestId,
   lookupGenid,
+  tryBeginFinalizing,
+  abortFinalizing,
   type StepRecord,
 } from '@/lib/supabase'
 import { downloadFromSessionBucket, uploadToSessionBucket, c2paExportStoragePath } from '@/lib/storage'
@@ -39,8 +41,12 @@ import { env } from '@/lib/env'
 // (re)generate the certificate. If a certificate already exists, return it
 // as-is — this endpoint is idempotent, not just retriable.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let sessionId: string | undefined
+  let lockAcquired = false
+
   try {
-    const { id: sessionId } = await params
+    const resolvedParams = await params
+    sessionId = resolvedParams.id
     const body = await req.json().catch(() => ({}))
     const requestedStepId = (body as { stepId?: string })?.stepId
 
@@ -51,8 +57,30 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (session.status === 'abandoned') {
       return NextResponse.json({ error: 'Session is abandoned' }, { status: 409 })
     }
+    if (session.status === 'finalizing') {
+      return NextResponse.json(
+        { error: 'Session is already being finalized by another request — try again shortly.' },
+        { status: 409 }
+      )
+    }
 
     const alreadyFinalized = session.status === 'finalized'
+
+    // Claim the session before doing any of the multi-step work below. This
+    // is the actual race guard: two concurrent calls can both pass the
+    // status checks above, but only one of them can win this atomic
+    // update — the loser gets a clear "already finalizing" error instead of
+    // redoing the generation/anchoring/upload work and racing on the final
+    // writes.
+    if (!alreadyFinalized) {
+      lockAcquired = await tryBeginFinalizing(sessionId)
+      if (!lockAcquired) {
+        return NextResponse.json(
+          { error: 'Session is already being finalized by another request — try again shortly.' },
+          { status: 409 }
+        )
+      }
+    }
 
     if (alreadyFinalized) {
       const existing = await getCertificateForSession(sessionId)
@@ -214,6 +242,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       c2paManifestEmbedded: c2paManifestId !== null,
     })
   } catch (err: unknown) {
+    // Release the lock so the session isn't stuck in 'finalizing' forever —
+    // scoped to WHERE status = 'finalizing' in abortFinalizing, so this is a
+    // harmless no-op if the failure happened after finalizeSession() already
+    // moved the session to 'finalized' (that case is handled by this same
+    // route's existing stuck-session recovery path instead).
+    if (lockAcquired && sessionId) {
+      try {
+        await abortFinalizing(sessionId)
+      } catch (releaseErr) {
+        console.error('Failed to release finalize lock:', releaseErr)
+      }
+    }
     const message = err instanceof Error ? err.message : 'Finalize failed'
     return NextResponse.json({ error: message }, { status: 500 })
   }

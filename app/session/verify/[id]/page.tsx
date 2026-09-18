@@ -82,16 +82,27 @@ export default async function VerifySessionPage({ params }: { params: Promise<{ 
               </span>
             </div>
             <div className="flex gap-4 text-xs text-gray-500 font-mono">
-              <span className={step.fileHashValid || step.fileArchived ? 'text-gray-500' : 'text-red-400'}>
-                {step.fileArchived ? 'file hash (archived)' : 'file hash'}
+              <span
+                className={
+                  (step.fileArchived ? step.archiveIntegrityValid !== false : step.fileHashValid)
+                    ? 'text-gray-500'
+                    : 'text-red-400'
+                }
+              >
+                {step.fileArchived ? 'archive integrity' : 'file hash'}
               </span>
               <span className={step.signatureValid ? 'text-gray-500' : 'text-red-400'}>signature</span>
               <span className={step.chainLinkValid ? 'text-gray-500' : 'text-red-400'}>chain link</span>
             </div>
             {step.fileArchived && (
               <p className="text-xs text-gray-600 mt-2">
-                This step&apos;s stored file was compressed for archival after finalize, per the retention policy —
-                its signature is still verified above; only the original full-resolution file is no longer re-hashable.
+                This step&apos;s stored file was compressed for archival after finalize, per the retention policy.
+                {step.archiveIntegrityValid === true &&
+                  ' The compressed file has been checked against the hash recorded at archive time — that is a different, weaker guarantee than an unarchived step’s file hash, which matches the original output_hash directly.'}
+                {step.archiveIntegrityValid === false &&
+                  ' The compressed file does NOT match the hash recorded at archive time — its signature chain is still intact, but the archived file itself should not be trusted.'}
+                {step.archiveIntegrityValid === null &&
+                  ' This step was archived before archive integrity tracking existed, so the compressed file cannot be checked against anything — its signature chain is still intact.'}
               </p>
             )}
           </div>
