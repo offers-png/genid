@@ -51,19 +51,20 @@ class FinalizeError extends Error {
 // (Section 5.2.3 — not every step, for cost control), and generates the
 // Authorship Certificate.
 //
-// Ordering matters here: the certificate PDF is built and uploaded BEFORE
-// any write marks the session finalized. If PDF generation throws (it did —
-// pdfkit's font files weren't reachable in the Render deploy, now fixed via
-// serverExternalPackages in next.config.ts), the session is untouched and
-// this same endpoint can just be called again.
-//
-// That also makes this route its own recovery path for sessions that got
-// stuck under the old ordering (finalized in the DB, no certificate ever
-// written): if status is already 'finalized', reuse the already-committed
-// final_step_id / session_root_hash / polygon_anchor_tx instead of
-// re-picking a step or paying for a second Polygon transaction, and just
-// (re)generate the certificate. If a certificate already exists, return it
-// as-is — this endpoint is idempotent, not just retriable.
+// Ordering (Sept 18 third follow-up — "only the request that wins
+// finalization should publish the final files"): finalizeSession(), the
+// token-gated write that actually transitions the session out of
+// 'finalizing', now runs BEFORE the certificate PDF and C2PA export are
+// generated or uploaded — not after. A request whose lock was reclaimed as
+// stale (this one just ran long) gets rejected by that call and stops
+// there, before it ever uploads anything — so it can no longer overwrite a
+// winning request's already-published files at the same fixed storage
+// paths. If PDF generation throws AFTER finalizeSession succeeds, the
+// session is left 'finalized' with no certificate yet — that's the one
+// case this ordering re-opens, and it's exactly what the alreadyFinalized
+// recovery branch below exists to heal: calling finalize again reuses the
+// committed final_step_id/session_root_hash/polygon_anchor_tx and just
+// (re)generates the certificate, no re-anchoring, no re-picking a step.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let sessionId: string | undefined
   let lockAcquired = false
@@ -187,7 +188,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // Reuse what's already stored on a recovery pass rather than recomputing.
     const sessionRootHash = session.session_root_hash ?? computeSessionRootHash(steps.map((s) => s.step_signature ?? ''))
 
-    let polygonAnchorTx = session.polygon_anchor_tx
+    // Only reuse a previously-recorded anchor if it actually anchored THIS
+    // root hash (Sept 18 third follow-up — "a failed finalization followed
+    // by another edit must not reuse an anchor for the old content"). A
+    // prior attempt can anchor successfully and then fail before
+    // completing (or have its lock reclaimed) — polygon_anchor_tx survives
+    // that on the session row so a same-content retry doesn't pay for a
+    // second transaction. But if an edit landed between that attempt and
+    // this one, the step list — and so the root hash — has changed, and
+    // the old anchor is for content that no longer exists. Comparing
+    // against polygon_anchor_root_hash (recorded alongside the tx) is what
+    // tells these two cases apart; without it there was no way to know
+    // whether a leftover polygon_anchor_tx still matched current content.
+    let polygonAnchorTx = session.polygon_anchor_root_hash === sessionRootHash ? session.polygon_anchor_tx : null
+
     if (!polygonAnchorTx && !alreadyFinalized) {
       try {
         const stamp = await withTimeout(
@@ -200,17 +214,44 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           'Polygon anchor'
         )
         polygonAnchorTx = stamp.txHash
-        // Persist the tx and refresh the lock heartbeat IMMEDIATELY — not
-        // at the end with everything else. If this request's lock later
-        // gets reclaimed as stale (e.g. it crashes during the still-slow
-        // PDF/C2PA work below), the new holder's getSession() read will
-        // already see this txHash and skip anchoring again, instead of
-        // submitting a second on-chain transaction for the same root hash.
+        // Persist the tx (bound to THIS root hash) and refresh the lock
+        // heartbeat immediately — not at the end with everything else. A
+        // reclaimed retry's getSession() read then sees this txHash paired
+        // with the root hash it anchors, and can tell whether it's still
+        // valid for whatever content that retry is finalizing.
         if (lockToken) {
-          await recordPolygonAnchorTx(sessionId, lockToken, polygonAnchorTx)
+          await recordPolygonAnchorTx(sessionId, lockToken, polygonAnchorTx, sessionRootHash)
         }
       } catch (blockchainErr) {
         console.error('Polygon anchor failed (non-fatal):', blockchainErr)
+      }
+    }
+
+    // This is the actual commit point: the token-gated write that moves
+    // the session out of 'finalizing'. Only the request that wins this
+    // update goes on to generate and publish the certificate/C2PA export —
+    // a request whose lock was reclaimed out from under it (this one ran
+    // long enough to look dead) is rejected here and stops immediately,
+    // before it can overwrite a winning request's files at the same fixed
+    // storage paths (Sept 18 third follow-up — "only the request that wins
+    // finalization should publish the final files").
+    if (!alreadyFinalized) {
+      if (!lockToken) {
+        throw new FinalizeError('Internal error: finalizing without a lock token', 500)
+      }
+      const committed = await finalizeSession(sessionId, finalStep.id, sessionRootHash, polygonAnchorTx, lockToken)
+      if (!committed) {
+        // Not our lock to release — a different request already holds it
+        // under a different token, or has already finalized under it.
+        // Nothing durable was published under our name (only the
+        // token-scoped anchor tx, which is safely reusable by whoever
+        // holds the lock now if the content still matches), so there's
+        // nothing to clean up beyond not proceeding.
+        lockAcquired = false
+        throw new FinalizeError(
+          'This session’s finalize lock was reclaimed by another request while this one was still working — nothing was committed. Please retry.',
+          409
+        )
       }
     }
 
@@ -225,14 +266,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const publicVerifyUrl = `${env.appUrl}/session/verify/${sessionId}`
 
     // C2PA manifest embedding (Build Spec Section 8) — best-effort and
-    // deliberately non-fatal, done before the PDF so the certificate can
-    // accurately say whether one is attached. It signs with a real, valid,
-    // non-self-signed certificate chain, but one issued outside the
-    // official C2PA Conformance Program, so it reads as untrusted in any
-    // third-party verifier (see lib/c2pa.ts for the full explanation,
-    // verified against a real embed/read-back round trip). A C2PA failure
-    // here never touches genid_sessions/genid_steps, so it can't re-create
-    // the stuck-session bug the ordering in this route already prevents.
+    // deliberately non-fatal. It signs with a real, valid, non-self-signed
+    // certificate chain, but one issued outside the official C2PA
+    // Conformance Program, so it reads as untrusted in any third-party
+    // verifier (see lib/c2pa.ts for the full explanation, verified against
+    // a real embed/read-back round trip).
     let c2paManifestId: string | null = null
     const finalCertStep = certificateSteps.find((s) => s.isFinal)
     if (finalCertStep?.imageBuffer) {
@@ -252,10 +290,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
     }
 
-    // Everything above this line is read-only or idempotent to repeat. The
-    // PDF generation below is the step that actually failed in production —
-    // nothing has been written to genid_sessions/genid_steps yet, so a
-    // throw here still leaves the session cleanly retriable.
     const pdfBuffer = await generateCertificatePdf({
       genidCode: session.genid_code,
       creatorName: record.user_name,
@@ -274,31 +308,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const pdfPath = `${sessionId}/certificate.pdf`
     await uploadToSessionBucket(pdfPath, pdfBuffer, 'application/pdf', { upsert: true })
 
-    // Only now commit the finalized state. finalizeSession — the write
-    // that actually transitions the session out of 'finalizing' — goes
-    // FIRST and is token-gated: if this request's lock has since been
-    // reclaimed by another process (this one ran long enough to look
-    // dead), that update affects zero rows and we must stop here rather
-    // than going on to mark a step final or write a certificate as if we
-    // still owned this session's finalize.
-    if (!alreadyFinalized) {
-      if (!lockToken) {
-        throw new FinalizeError('Internal error: finalizing without a lock token', 500)
-      }
-      const committed = await finalizeSession(sessionId, finalStep.id, sessionRootHash, polygonAnchorTx, lockToken)
-      if (!committed) {
-        // Not our lock to release — a different request already holds
-        // it under a different token. Nothing we did above was written
-        // anywhere durable except the token-scoped anchor tx (already
-        // safely reusable by whoever holds the lock now), so there is
-        // nothing to clean up.
-        lockAcquired = false
-        throw new FinalizeError(
-          'This session’s finalize lock was reclaimed by another request while this one was still working — nothing was committed. Please retry.',
-          409
-        )
-      }
-    }
     await markStepFinal(finalStep.id, sessionId)
     if (c2paManifestId) {
       await setSessionC2paManifestId(sessionId, c2paManifestId)
