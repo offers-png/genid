@@ -44,6 +44,18 @@ export default function RegisterPage() {
         return
       }
 
+      // Stripe's return_url can't carry the verification session id (it has
+      // to be finalized before Stripe assigns one) — stash it here instead,
+      // before navigating away, so /register/callback can read it back
+      // after Stripe's redirect and sign the caller in without a magic-link
+      // email round trip.
+      try {
+        sessionStorage.setItem(`genid_vsid:${email}`, data.sessionId)
+      } catch {
+        // sessionStorage unavailable (e.g. private browsing) — callback
+        // page falls back to its manual "success" flow without it.
+      }
+
       setStep('redirecting')
       window.location.href = data.url
     } catch {

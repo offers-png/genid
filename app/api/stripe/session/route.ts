@@ -54,6 +54,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // return_url has to be finalized as an input to this very call, before
+    // Stripe assigns sessionId as its output — there's no way to embed
+    // sessionId in return_url itself (Stripe's Identity API has no
+    // Checkout-style {SESSION_ID} placeholder, and return_url can't be
+    // patched after creation). The browser already gets sessionId back in
+    // this response, though, well before it ever navigates to Stripe — see
+    // app/register/page.tsx, which stashes it in sessionStorage so
+    // /register/callback can read it back after Stripe's redirect.
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
     const { sessionId, url } = await createIdentityVerificationSession({
       email,

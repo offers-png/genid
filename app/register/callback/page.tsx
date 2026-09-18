@@ -1,10 +1,10 @@
 'use client'
 
 import { Suspense, useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 
-type Status = 'polling' | 'success' | 'timeout' | 'error' | 'failed' | 'canceled'
+type Status = 'polling' | 'signing_in' | 'success' | 'timeout' | 'error' | 'failed' | 'canceled'
 
 interface RegistrationResult {
   genid_code: string
@@ -19,7 +19,18 @@ const POLL_INTERVAL = 3000
 
 function CallbackContent() {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const email = searchParams.get('email') ?? ''
+  // Stripe's return_url can't carry this (see app/api/stripe/session/route.ts)
+  // — app/register/page.tsx stashes it here before redirecting to Stripe.
+  const [vsid] = useState<string>(() => {
+    if (typeof window === 'undefined' || !email) return ''
+    try {
+      return sessionStorage.getItem(`genid_vsid:${email}`) ?? ''
+    } catch {
+      return ''
+    }
+  })
 
   const [status, setStatus] = useState<Status>(() => (email ? 'polling' : 'error'))
   const [result, setResult] = useState<RegistrationResult | null>(null)
@@ -53,6 +64,38 @@ function CallbackContent() {
 
           if (data.verified) {
             setResult(data)
+
+            // Sign the caller in immediately using the Stripe verification
+            // session id stashed in sessionStorage before the Stripe
+            // redirect — no magic-link email round trip needed right after
+            // they just finished verifying. Falls back to the manual
+            // "success" card (and its link into the product) if vsid is
+            // missing — e.g. the register page's fast-path redirect here
+            // for an already-verified email, which never went through
+            // Stripe's redirect in this session.
+            if (vsid) {
+              setStatus('signing_in')
+              try {
+                const completeRes = await fetch('/api/auth/complete-registration', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ email, vsid }),
+                })
+                if (completeRes.ok) {
+                  try {
+                    sessionStorage.removeItem(`genid_vsid:${email}`)
+                  } catch {
+                    // non-fatal — stale entries just fail the vsid match next time
+                  }
+                  if (cancelledRef.current) return
+                  router.push('/dashboard')
+                  return
+                }
+              } catch {
+                // network hiccup — fall through to the manual success card
+              }
+            }
+
             setStatus('success')
             return
           }
@@ -80,7 +123,17 @@ function CallbackContent() {
     return () => {
       cancelledRef.current = true
     }
-  }, [email])
+  }, [email, vsid, router])
+
+  if (status === 'signing_in') {
+    return (
+      <div className="max-w-lg mx-auto px-6 py-20 text-center">
+        <div className="w-16 h-16 border-2 border-violet-500 border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
+        <h2 className="text-2xl font-bold text-white mb-4">Identity Verified</h2>
+        <p className="text-gray-400">Signing you in…</p>
+      </div>
+    )
+  }
 
   if (status === 'success' && result) {
     return (
