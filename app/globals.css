@@ -1,26 +1,15 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* This app ships one fixed dark theme (bg-gray-950/text-gray-100, set on
+   <body> in app/layout.tsx) — it doesn't have a light mode to switch to.
+   The stock Next.js template's light/dark --background/--foreground
+   variables lived here as plain, unlayered CSS, which in Tailwind v4 wins
+   the cascade over ANY layered utility class regardless of specificity —
+   so on a system with no dark color-scheme preference, this rule was
+   silently painting <body> white-on-dark-text UNDER the Tailwind classes,
+   leaving light-mode visitors looking at white text (e.g. the sign-in
+   page's <h1 className="text-white">) on a white background. */
 
 body {
-  background: var(--background);
-  color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }

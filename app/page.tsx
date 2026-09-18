@@ -12,7 +12,7 @@ export default function Home() {
         </h1>
         <p className="text-xl text-gray-300 max-w-2xl mx-auto mb-10">
           GENID Protocol cryptographically embeds a verified human identity into AI-generated content
-          at the moment of creation — invisible to the eye, permanent on the blockchain.
+          at the moment of creation — invisible to the eye, signed, and independently verifiable by anyone.
         </p>
         <div className="flex items-center justify-center gap-4">
           <a href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-3 rounded-lg font-medium text-lg transition-colors shadow-lg">
@@ -31,7 +31,7 @@ export default function Home() {
             { step: '01', title: 'Verify Identity', desc: 'Complete government ID verification via Stripe Identity. One-time, takes 2 minutes.' },
             { step: '02', title: 'Receive GENID', desc: 'Get your unique creator code (e.g. SA11212) permanently tied to your verified identity.' },
             { step: '03', title: 'Stamp Your Content', desc: 'Upload any AI-generated image. GENID embeds your code invisibly using LSB steganography.' },
-            { step: '04', title: 'Blockchain Logged', desc: 'Every stamped file is permanently recorded on the Polygon blockchain with timestamp and hash.' },
+            { step: '04', title: 'Blockchain Anchored', desc: 'GENID attempts to anchor every stamp on the Polygon blockchain with a timestamp and hash. Verification never depends on that anchor succeeding — it works off the signed record either way.' },
           ].map(({ step, title, desc }) => (
             <div key={step} className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
               <div className="text-violet-600 font-mono text-sm mb-3 font-bold">{step}</div>
@@ -45,10 +45,10 @@ export default function Home() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-20">
         {[
           { title: 'LSB Steganography', desc: 'Your GENID is hidden in the least significant bits of each pixel — invisible to the human eye, but extractable by any verification tool.', tag: 'Core Tech' },
-          { title: 'Blockchain Provenance', desc: 'Every stamped image creates an immutable record on Polygon with content hash, creator GENID, and UTC timestamp.', tag: 'Polygon Network' },
+          { title: 'Blockchain Provenance', desc: 'Every stamped image is signed and logged immediately; GENID also attempts to anchor it on Polygon with content hash, creator GENID, and UTC timestamp for an additional public record.', tag: 'Polygon Network' },
           { title: 'KYC Identity Binding', desc: 'No pseudonyms. Each GENID is bound to a government-verified identity through Stripe Identity, providing legal accountability.', tag: 'Stripe Identity' },
-          { title: 'Public Verification', desc: 'Anyone can upload an image to our verification endpoint and instantly see who created it, when, and with what platform.', tag: 'Open Verification' },
-          { title: 'Survives Compression', desc: 'Output is always PNG. The embedded GENID survives format preservation — any tool reading the PNG can extract the creator code.', tag: 'Robust Encoding' },
+          { title: 'Public Verification', desc: 'Anyone can upload an image to our verification endpoint and see who submitted it through GenID, when, and with what platform — this confirms the submitter, not who created the underlying content or whether it was AI-generated.', tag: 'Open Verification' },
+          { title: 'Lossless PNG Encoding', desc: 'Output is always an uncompressed PNG, so the embedded GENID survives as long as the file stays untouched. Re-saving as JPEG, resizing, or letting a platform recompress the upload can strip it — always verify the exact file you received.', tag: 'Robust Encoding' },
           { title: 'Legal Mandate Ready', desc: 'Designed to be adopted as a mandatory standard — every AI platform can integrate GENID Protocol through a simple API.', tag: 'Policy Ready' },
         ].map(({ title, desc, tag }) => (
           <div key={title} className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm hover:shadow-md hover:border-violet-300 transition-all">
