@@ -21,7 +21,7 @@ import { env } from './env'
 
 export const SESSION_COOKIE_NAME = 'genid_session'
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30 // 30 days
-const MAGIC_LINK_TTL_SECONDS = 60 * 15 // 15 minutes
+export const MAGIC_LINK_TTL_SECONDS = 60 * 15 // 15 minutes
 
 // Registration token (Sept 19 fix, replacing a reusable Stripe verification
 // id check — see migration 013). 30 minutes, longer than a magic link's,
@@ -29,6 +29,14 @@ const MAGIC_LINK_TTL_SECONDS = 60 * 15 // 15 minutes
 // has to survive the ENTIRE trip out to Stripe and back, not just a click.
 export const REGISTRATION_TOKEN_COOKIE_NAME = 'genid_registration_token'
 const REGISTRATION_TOKEN_TTL_SECONDS = 60 * 30 // 30 minutes
+
+// Email confirmation proof (Sept 19 third fix, requiring proof of email
+// control BEFORE Stripe verification ever starts — see migration 015).
+// This is literally a second magic-link token (createMagicLinkToken /
+// consumeMagicLinkToken below), minted right after the first one is
+// redeemed, and carried to POST /api/stripe/session as an httpOnly cookie
+// rather than a URL param — same reasoning as REGISTRATION_TOKEN_COOKIE_NAME.
+export const EMAIL_CONFIRMATION_TOKEN_COOKIE_NAME = 'genid_email_confirmation_token'
 
 export interface SessionPayload {
   email: string
