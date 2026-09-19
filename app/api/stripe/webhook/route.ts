@@ -34,37 +34,60 @@ export async function POST(req: NextRequest) {
         .join(' ')
         .trim()
 
-      if (verifiedName) {
-        await supabaseAdmin
-          .from('genid_registry')
-          .update({
+      // Sept 19 third fix: don't trust session.metadata.email on its own —
+      // it's just a value OUR server set at session-creation time, and
+      // nothing here proves the registrant who finished this particular
+      // Stripe flow actually controls that inbox. email_confirmed_at is
+      // only ever set by GET /api/auth/confirm-registration, right after
+      // consuming a magic-link token mailed to that exact address — so
+      // requiring it here (rather than writing verified: true
+      // unconditionally) is what closes the registration-time hijack this
+      // whole flow exists to prevent: an attacker registering with a
+      // victim's email and completing verification with their own,
+      // genuinely real, identity.
+      const updatePayload = verifiedName
+        ? {
             verified: true,
             verification_status: 'verified',
             stripe_verification_id: session.id,
             user_name: verifiedName,
             name_verified: true,
-          })
-          .eq('email', email)
-      } else {
-        // Stripe confirmed identity but this verification flow returned no
-        // name in verified_outputs (happens for some document/flow
-        // combinations) — identity is verified, but the DISPLAY NAME is
-        // still whatever the registrant typed. Leave user_name untouched
-        // and explicitly mark it unverified rather than silently letting
-        // the self-reported value keep riding on `verified: true`.
-        console.warn(
-          `Stripe verification ${session.id} for ${email} succeeded with no verified_outputs name — ` +
-            'user_name stays self-reported and name_verified is set to false.'
-        )
-        await supabaseAdmin
-          .from('genid_registry')
-          .update({
+          }
+        : {
+            // Stripe confirmed identity but this verification flow
+            // returned no name in verified_outputs (happens for some
+            // document/flow combinations) — identity is verified, but the
+            // DISPLAY NAME is still whatever the registrant typed. Leave
+            // user_name untouched and explicitly mark it unverified rather
+            // than silently letting the self-reported value keep riding on
+            // `verified: true`.
             verified: true,
             verification_status: 'verified',
             stripe_verification_id: session.id,
             name_verified: false,
-          })
-          .eq('email', email)
+          }
+      if (!verifiedName) {
+        console.warn(
+          `Stripe verification ${session.id} for ${email} succeeded with no verified_outputs name — ` +
+            'user_name stays self-reported and name_verified is set to false.'
+        )
+      }
+
+      const { data: updated, error: updateError } = await supabaseAdmin
+        .from('genid_registry')
+        .update(updatePayload)
+        .eq('email', email)
+        .not('email_confirmed_at', 'is', null)
+        .select('id')
+
+      if (updateError) {
+        console.error(`Failed to write verified: true for ${email} (session ${session.id}):`, updateError.message)
+      } else if (!updated || updated.length === 0) {
+        console.warn(
+          `Stripe verification ${session.id} reported metadata.email=${email}, but that registry row has no ` +
+            'email_confirmed_at — refusing to mark it verified. This email was never confirmed via ' +
+            'GET /api/auth/confirm-registration for this registration attempt.'
+        )
       }
 
       return NextResponse.json({ received: true })

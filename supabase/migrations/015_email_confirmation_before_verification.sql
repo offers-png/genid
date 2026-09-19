@@ -1,0 +1,25 @@
+-- GenID Protocol: require proof of email control BEFORE Stripe Identity
+-- verification ever starts (Sept 19 third fix).
+--
+-- Registration previously took `email` as a bare, unverified string from
+-- the registration form and immediately created a genid_registry row plus
+-- a Stripe Identity verification session tied to it. Nothing ever proved
+-- the person submitting the form controlled that inbox — an attacker could
+-- register with a victim's email, complete Stripe verification with their
+-- OWN real ID/selfie, and the webhook would happily mark the VICTIM's
+-- email as verified with the ATTACKER's identity attached (registration-
+-- time hijack, not just a login bypass).
+--
+-- The fix flips the order: registration now requires clicking a
+-- confirmation link (the exact magic-link token machinery already used
+-- for /login — genid_magic_link_tokens, createMagicLinkToken,
+-- consumeMagicLinkToken) before POST /api/stripe/session is ever called.
+-- email_confirmed_at is the durable, server-set marker that proves this
+-- happened for THIS registry row — set once, at the moment the
+-- confirmation link's token is redeemed and (immediately after, same
+-- request) a Stripe verification session is created for that confirmed
+-- email. The webhook now requires this to be set before writing
+-- verified: true, instead of unconditionally trusting whatever email
+-- arrives in Stripe's session metadata.
+alter table genid_registry
+  add column if not exists email_confirmed_at timestamptz;
