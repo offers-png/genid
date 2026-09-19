@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createIdentityVerificationSession } from '@/lib/stripe'
 import { supabaseAdmin } from '@/lib/supabase'
 import { issueUniqueGenid } from '@/lib/genid'
+import { createRegistrationToken, REGISTRATION_TOKEN_COOKIE_NAME } from '@/lib/auth'
+
+const REGISTRATION_TOKEN_COOKIE_MAX_AGE = 60 * 30 // 30 minutes, matches createRegistrationToken's TTL
 
 export async function POST(req: NextRequest) {
   try {
@@ -54,21 +57,29 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // return_url has to be finalized as an input to this very call, before
-    // Stripe assigns sessionId as its output — there's no way to embed
-    // sessionId in return_url itself (Stripe's Identity API has no
-    // Checkout-style {SESSION_ID} placeholder, and return_url can't be
-    // patched after creation). The browser already gets sessionId back in
-    // this response, though, well before it ever navigates to Stripe — see
-    // app/register/page.tsx, which stashes it in sessionStorage so
-    // /register/callback can read it back after Stripe's redirect.
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-    const { sessionId, url } = await createIdentityVerificationSession({
+    const { url } = await createIdentityVerificationSession({
       email,
       returnUrl: `${baseUrl}/register/callback?email=${encodeURIComponent(email)}`,
     })
 
-    return NextResponse.json({ sessionId, url })
+    // Issues the short-lived, single-use registration token (lib/auth.ts)
+    // that lets /register/callback sign the caller straight in once Stripe
+    // confirms verification, without a magic-link email round trip.
+    // Delivered as an httpOnly cookie — not returned in the JSON body and
+    // never touched by client-side JS — specifically so it's bound to
+    // whatever browser holds this cookie rather than to any value a client
+    // could read, copy, or replay from a different browser.
+    const registrationToken = await createRegistrationToken(email)
+    const response = NextResponse.json({ url })
+    response.cookies.set(REGISTRATION_TOKEN_COOKIE_NAME, registrationToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: REGISTRATION_TOKEN_COOKIE_MAX_AGE,
+    })
+    return response
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: 500 })
