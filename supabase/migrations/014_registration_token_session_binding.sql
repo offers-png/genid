@@ -1,0 +1,24 @@
+-- GenID Protocol: bind each registration token to the exact Stripe
+-- verification session it was issued for (Sept 19 second fix).
+--
+-- Migration 013's genid_registration_tokens fixed replay of a single
+-- durable value, but the token itself was only ever keyed by email, not by
+-- which Stripe verification session it corresponded to. POST
+-- /api/stripe/session doesn't block a second registration attempt for an
+-- email that's merely pending (only a fully-verified one is rejected), so
+-- an attacker could start their OWN registration attempt using a victim's
+-- email while the victim's real verification is in progress, receive
+-- their own valid token, and then redeem it once the VICTIM finishes
+-- verifying — since genid_registry.verified is a plain per-email flag with
+-- no record of which session flipped it. The attacker never had to
+-- complete any identity check themselves.
+--
+-- stripe_verification_session_id records exactly which session this token
+-- was issued alongside. POST /api/auth/complete-registration now requires
+-- genid_registry.stripe_verification_id (written by the webhook only on
+-- identity.verification_session.verified) to equal THIS value before
+-- issuing a login cookie — so a token only redeems if its own session is
+-- the one Stripe actually confirmed, not merely if the email is verified
+-- by way of a different session.
+alter table genid_registration_tokens
+  add column if not exists stripe_verification_session_id text;

@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
     }
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-    const { url } = await createIdentityVerificationSession({
+    const { sessionId, url } = await createIdentityVerificationSession({
       email,
       returnUrl: `${baseUrl}/register/callback?email=${encodeURIComponent(email)}`,
     })
@@ -69,8 +69,12 @@ export async function POST(req: NextRequest) {
     // Delivered as an httpOnly cookie — not returned in the JSON body and
     // never touched by client-side JS — specifically so it's bound to
     // whatever browser holds this cookie rather than to any value a client
-    // could read, copy, or replay from a different browser.
-    const registrationToken = await createRegistrationToken(email)
+    // could read, copy, or replay from a different browser. Also bound to
+    // THIS exact Stripe verification session id — since a second
+    // registration attempt for a still-pending email isn't rejected above,
+    // this is what stops that second attempt's own token from redeeming
+    // off of whichever OTHER session actually gets verified.
+    const registrationToken = await createRegistrationToken(email, sessionId)
     const response = NextResponse.json({ url })
     response.cookies.set(REGISTRATION_TOKEN_COOKIE_NAME, registrationToken, {
       httpOnly: true,

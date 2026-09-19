@@ -186,16 +186,38 @@ export async function consumeMagicLinkToken(token: string): Promise<string | nul
 // cookie (see POST /api/stripe/session) rather than emailed, and consumed
 // by reading that same cookie back rather than a client-supplied field, so
 // only the literal browser that received it can ever redeem it.
+//
+// Sept 19 second fix (migration 014): single-use/short-lived/browser-bound
+// alone wasn't enough, because the token was keyed only by email, not by
+// WHICH Stripe verification session it was issued alongside.
+// POST /api/stripe/session doesn't reject a second registration attempt
+// for an email that's merely pending (only a fully-verified one is
+// rejected) — so an attacker could start their own registration using a
+// victim's email while the victim's real verification is in progress,
+// receive their own valid token, and then redeem it once the VICTIM
+// finishes verifying, since genid_registry.verified is a plain per-email
+// flag with no record of which session flipped it. Recording the
+// session id on the token itself, and requiring it to match
+// stripe_verification_id (written by the webhook only on an actual
+// identity.verification_session.verified event) closes that: a token only
+// redeems if ITS OWN session is the one Stripe confirmed, not merely if
+// the email ended up verified by way of a different session.
+
+export interface RegistrationTokenClaim {
+  email: string
+  stripeVerificationSessionId: string | null
+}
 
 // Always succeeds regardless of whether the email is already registered —
 // same reasoning as createMagicLinkToken: the route layer decides what to
 // tell the caller, but a stray row can only ever be redeemed for a real
 // registry email.
-export async function createRegistrationToken(email: string): Promise<string> {
+export async function createRegistrationToken(email: string, stripeVerificationSessionId: string): Promise<string> {
   const token = randomToken()
   const { error } = await getAdmin().from('genid_registration_tokens').insert({
     email,
     token_hash: hashToken(token),
+    stripe_verification_session_id: stripeVerificationSessionId,
     expires_at: new Date(Date.now() + REGISTRATION_TOKEN_TTL_SECONDS * 1000).toISOString(),
   })
   if (error) throw new Error(`Failed to create registration token: ${error.message}`)
@@ -204,8 +226,10 @@ export async function createRegistrationToken(email: string): Promise<string> {
 
 // Single-use via the same atomic UPDATE ... WHERE used_at IS NULL claim as
 // consumeMagicLinkToken — two near-simultaneous redemptions (e.g. a
-// double-submitted request) can't both succeed.
-export async function consumeRegistrationToken(token: string): Promise<string | null> {
+// double-submitted request) can't both succeed. Returns the session id
+// this specific token was issued for, alongside its email, so the caller
+// can check that THAT session (not just the email in general) was verified.
+export async function consumeRegistrationToken(token: string): Promise<RegistrationTokenClaim | null> {
   const tokenHash = hashToken(token)
   const admin = getAdmin()
 
@@ -215,9 +239,10 @@ export async function consumeRegistrationToken(token: string): Promise<string | 
     .eq('token_hash', tokenHash)
     .is('used_at', null)
     .gt('expires_at', new Date().toISOString())
-    .select('email')
+    .select('email, stripe_verification_session_id')
     .maybeSingle()
 
   if (error) throw new Error(`Failed to consume registration token: ${error.message}`)
-  return data?.email ?? null
+  if (!data) return null
+  return { email: data.email, stripeVerificationSessionId: data.stripe_verification_session_id ?? null }
 }
