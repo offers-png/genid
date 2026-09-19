@@ -21,16 +21,6 @@ function CallbackContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const email = searchParams.get('email') ?? ''
-  // Stripe's return_url can't carry this (see app/api/stripe/session/route.ts)
-  // — app/register/page.tsx stashes it here before redirecting to Stripe.
-  const [vsid] = useState<string>(() => {
-    if (typeof window === 'undefined' || !email) return ''
-    try {
-      return sessionStorage.getItem(`genid_vsid:${email}`) ?? ''
-    } catch {
-      return ''
-    }
-  })
 
   const [status, setStatus] = useState<Status>(() => (email ? 'polling' : 'error'))
   const [result, setResult] = useState<RegistrationResult | null>(null)
@@ -65,35 +55,27 @@ function CallbackContent() {
           if (data.verified) {
             setResult(data)
 
-            // Sign the caller in immediately using the Stripe verification
-            // session id stashed in sessionStorage before the Stripe
-            // redirect — no magic-link email round trip needed right after
-            // they just finished verifying. Falls back to the manual
-            // "success" card (and its link into the product) if vsid is
-            // missing — e.g. the register page's fast-path redirect here
-            // for an already-verified email, which never went through
-            // Stripe's redirect in this session.
-            if (vsid) {
-              setStatus('signing_in')
-              try {
-                const completeRes = await fetch('/api/auth/complete-registration', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ email, vsid }),
-                })
-                if (completeRes.ok) {
-                  try {
-                    sessionStorage.removeItem(`genid_vsid:${email}`)
-                  } catch {
-                    // non-fatal — stale entries just fail the vsid match next time
-                  }
-                  if (cancelledRef.current) return
-                  router.push('/dashboard')
-                  return
-                }
-              } catch {
-                // network hiccup — fall through to the manual success card
+            // Sign the caller in immediately using the httpOnly
+            // registration-token cookie POST /api/stripe/session set
+            // before the Stripe redirect — no magic-link email round trip
+            // needed right after they just finished verifying. The browser
+            // sends that cookie automatically; nothing to read or pass
+            // here. Falls back to the manual "success" card (and its link
+            // into the product) if the server rejects it — e.g. the
+            // register page's fast-path redirect here for an
+            // already-verified email, which never went through Stripe's
+            // redirect (and so never received that cookie) in this
+            // browser session.
+            setStatus('signing_in')
+            try {
+              const completeRes = await fetch('/api/auth/complete-registration', { method: 'POST' })
+              if (completeRes.ok) {
+                if (cancelledRef.current) return
+                router.push('/dashboard')
+                return
               }
+            } catch {
+              // network hiccup — fall through to the manual success card
             }
 
             setStatus('success')
@@ -123,7 +105,7 @@ function CallbackContent() {
     return () => {
       cancelledRef.current = true
     }
-  }, [email, vsid, router])
+  }, [email, router])
 
   if (status === 'signing_in') {
     return (

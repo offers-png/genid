@@ -23,6 +23,13 @@ export const SESSION_COOKIE_NAME = 'genid_session'
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30 // 30 days
 const MAGIC_LINK_TTL_SECONDS = 60 * 15 // 15 minutes
 
+// Registration token (Sept 19 fix, replacing a reusable Stripe verification
+// id check — see migration 013). 30 minutes, longer than a magic link's,
+// because Stripe document review can genuinely take a while and this token
+// has to survive the ENTIRE trip out to Stripe and back, not just a click.
+export const REGISTRATION_TOKEN_COOKIE_NAME = 'genid_registration_token'
+const REGISTRATION_TOKEN_TTL_SECONDS = 60 * 30 // 30 minutes
+
 export interface SessionPayload {
   email: string
   genidCode: string
@@ -163,5 +170,54 @@ export async function consumeMagicLinkToken(token: string): Promise<string | nul
     .maybeSingle()
 
   if (error) throw new Error(`Failed to consume magic link token: ${error.message}`)
+  return data?.email ?? null
+}
+
+// ---- Registration tokens ----
+//
+// Replaces a previous, broken design in POST /api/auth/complete-registration
+// that compared a client-supplied Stripe verification session id against
+// genid_registry.stripe_verification_id: that column is a durable value
+// that never changes once set, so anyone who ever learned it (browser
+// history, a referrer header, a stray log line) could replay it forever,
+// from any browser, to sign in as that registrant. This is single-use and
+// short-lived, the same pattern as the magic-link tokens above — the
+// difference is delivery: this one is handed to the browser as an httpOnly
+// cookie (see POST /api/stripe/session) rather than emailed, and consumed
+// by reading that same cookie back rather than a client-supplied field, so
+// only the literal browser that received it can ever redeem it.
+
+// Always succeeds regardless of whether the email is already registered —
+// same reasoning as createMagicLinkToken: the route layer decides what to
+// tell the caller, but a stray row can only ever be redeemed for a real
+// registry email.
+export async function createRegistrationToken(email: string): Promise<string> {
+  const token = randomToken()
+  const { error } = await getAdmin().from('genid_registration_tokens').insert({
+    email,
+    token_hash: hashToken(token),
+    expires_at: new Date(Date.now() + REGISTRATION_TOKEN_TTL_SECONDS * 1000).toISOString(),
+  })
+  if (error) throw new Error(`Failed to create registration token: ${error.message}`)
+  return token
+}
+
+// Single-use via the same atomic UPDATE ... WHERE used_at IS NULL claim as
+// consumeMagicLinkToken — two near-simultaneous redemptions (e.g. a
+// double-submitted request) can't both succeed.
+export async function consumeRegistrationToken(token: string): Promise<string | null> {
+  const tokenHash = hashToken(token)
+  const admin = getAdmin()
+
+  const { data, error } = await admin
+    .from('genid_registration_tokens')
+    .update({ used_at: new Date().toISOString() })
+    .eq('token_hash', tokenHash)
+    .is('used_at', null)
+    .gt('expires_at', new Date().toISOString())
+    .select('email')
+    .maybeSingle()
+
+  if (error) throw new Error(`Failed to consume registration token: ${error.message}`)
   return data?.email ?? null
 }
