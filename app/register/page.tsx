@@ -10,6 +10,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_or_expired: 'That confirmation link is invalid or has expired. Request a new one below.',
   account_not_found: 'That confirmation link no longer points to a registration in progress.',
   server_error: 'Something went wrong confirming that link. Please try again.',
+  rate_limited: 'Too many confirmation attempts from this network. Please wait and try again.',
 }
 
 function RegisterForm() {
@@ -28,20 +29,16 @@ function RegisterForm() {
     setError('')
 
     try {
-      const checkRes = await fetch(`/api/genid/issue?email=${encodeURIComponent(email)}`)
-      if (checkRes.ok) {
-        window.location.href = `/register/callback?email=${encodeURIComponent(email)}`
-        return
-      }
-    } catch {
-      // not found, continue to registration
-    }
-
-    try {
       // Identity verification doesn't start yet — this only reserves the
       // registry row and sends a confirmation link to this email. Stripe
       // isn't involved until that link is clicked (Sept 19 third fix —
       // nothing here proved the submitter controls this inbox before).
+      //
+      // No "is this email already registered?" fast-path check happens
+      // here first anymore (Sept 30 fix) — that used to call
+      // GET /api/genid/issue?email=..., which leaked any registrant's
+      // name/GENID code/verification status to whoever asked. The 409
+      // branch below, from this same call, already covers it.
       const res = await fetch('/api/register/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -51,7 +48,11 @@ function RegisterForm() {
 
       if (!res.ok) {
         if (res.status === 409) {
-          window.location.href = `/register/callback?email=${encodeURIComponent(email)}`
+          // Already fully registered — /register/callback's polling now
+          // requires a registration-token cookie this browser was never
+          // issued (it never went through this session's confirm+Stripe
+          // flow), so it can't help here. Sign in instead.
+          window.location.href = '/login?notice=already_registered'
           return
         }
         setError(data.error ?? 'Something went wrong')

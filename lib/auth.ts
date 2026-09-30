@@ -254,3 +254,29 @@ export async function consumeRegistrationToken(token: string): Promise<Registrat
   if (!data) return null
   return { email: data.email, stripeVerificationSessionId: data.stripe_verification_session_id ?? null }
 }
+
+// Read-only counterpart to consumeRegistrationToken — same WHERE clause
+// (unused, unexpired), but a plain SELECT instead of an UPDATE, so it can
+// be called repeatedly without burning the token's single use. This is
+// what GET /api/genid/issue uses to resolve "whose registration is this
+// browser polling for" from the registration-token cookie: that endpoint
+// used to take a bare, client-supplied email and return that registrant's
+// name/GENID code/verification status to anyone who asked (Sept 30 fix —
+// the exact bug class every other route here was rewritten to eliminate).
+// Scoping the lookup to a token only the registering browser ever received
+// closes that without needing to consume (and so invalidate) the token on
+// every poll.
+export async function peekRegistrationToken(token: string): Promise<RegistrationTokenClaim | null> {
+  const tokenHash = hashToken(token)
+  const { data, error } = await getAdmin()
+    .from('genid_registration_tokens')
+    .select('email, stripe_verification_session_id')
+    .eq('token_hash', tokenHash)
+    .is('used_at', null)
+    .gt('expires_at', new Date().toISOString())
+    .maybeSingle()
+
+  if (error) throw new Error(`Failed to look up registration token: ${error.message}`)
+  if (!data) return null
+  return { email: data.email, stripeVerificationSessionId: data.stripe_verification_session_id ?? null }
+}

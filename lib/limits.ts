@@ -69,6 +69,17 @@ export const EMBED_RATE_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
 export const VERIFY_RATE_LIMIT = 20
 export const VERIFY_RATE_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
 
+// Sept 30 fix: /api/register/start and /api/auth/confirm-registration were
+// only rate-limited per email (MAGIC_LINK_RATE_LIMIT) — nothing stopped
+// one IP from driving that same per-email budget across many different
+// (disposable) addresses, each ending in a billed Stripe Identity
+// verification session. There's no login yet at either of these steps, so
+// like /api/verify, IP is the only dimension available. Tighter than
+// VERIFY_RATE_LIMIT since each hit here is a real Resend send and can end
+// in a real Stripe charge, not a free read.
+export const REGISTRATION_IP_RATE_LIMIT = 10
+export const REGISTRATION_IP_RATE_WINDOW_MS = 15 * 60 * 1000 // 15 minutes
+
 const RATE_LIMIT_MAX_TRACKED_KEYS = 10_000
 const rateLimitBuckets = new Map<string, number[]>()
 

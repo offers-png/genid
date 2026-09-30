@@ -4,7 +4,14 @@ import { issueUniqueGenid } from '@/lib/genid'
 import { createMagicLinkToken, countRecentMagicLinkRequestsForEmail } from '@/lib/auth'
 import { sendRegistrationConfirmationEmail } from '@/lib/mailer'
 import { env } from '@/lib/env'
-import { MAGIC_LINK_RATE_LIMIT, MAGIC_LINK_RATE_WINDOW_MS } from '@/lib/limits'
+import {
+  MAGIC_LINK_RATE_LIMIT,
+  MAGIC_LINK_RATE_WINDOW_MS,
+  REGISTRATION_IP_RATE_LIMIT,
+  REGISTRATION_IP_RATE_WINDOW_MS,
+  checkInMemoryRateLimit,
+  getClientIp,
+} from '@/lib/limits'
 
 // POST { fullName, email } — start of registration (Sept 19 third fix).
 // Previously, submitting this form went straight to
@@ -25,6 +32,20 @@ import { MAGIC_LINK_RATE_LIMIT, MAGIC_LINK_RATE_WINDOW_MS } from '@/lib/limits'
 // that link is clicked — see GET /api/auth/confirm-registration.
 export async function POST(req: NextRequest) {
   try {
+    // Sept 30 fix: MAGIC_LINK_RATE_LIMIT below caps requests per EMAIL —
+    // nothing stopped one IP from driving that same budget across many
+    // different (disposable) addresses, each a real Resend send and a
+    // registration attempt one confirmation click away from a billed
+    // Stripe Identity session. No login exists yet at this step, so like
+    // /api/verify, IP is the only dimension available.
+    const clientIp = getClientIp(req)
+    if (!checkInMemoryRateLimit(`register-start:${clientIp}`, REGISTRATION_IP_RATE_LIMIT, REGISTRATION_IP_RATE_WINDOW_MS)) {
+      return NextResponse.json(
+        { error: 'Too many registration attempts from this network. Please wait and try again.' },
+        { status: 429 }
+      )
+    }
+
     const { fullName, email } = await req.json()
 
     if (!fullName || !email) {

@@ -11,9 +11,14 @@ const ERROR_MESSAGES: Record<string, string> = {
   server_error: 'Something went wrong verifying that link. Please try again.',
 }
 
+const NOTICE_MESSAGES: Record<string, string> = {
+  already_registered: 'This email already has a GENID — sign in below instead.',
+}
+
 function LoginForm() {
   const searchParams = useSearchParams()
   const linkError = searchParams.get('error')
+  const notice = searchParams.get('notice')
 
   const [email, setEmail] = useState('')
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
@@ -67,6 +72,12 @@ function LoginForm() {
       {linkError && (
         <div className="bg-red-950/50 border border-red-800 rounded-lg p-3 text-sm text-red-300 mb-6">
           {ERROR_MESSAGES[linkError] ?? 'That sign-in link could not be used.'}
+        </div>
+      )}
+
+      {!linkError && notice && (
+        <div className="bg-violet-950/50 border border-violet-800 rounded-lg p-3 text-sm text-violet-300 mb-6">
+          {NOTICE_MESSAGES[notice] ?? ''}
         </div>
       )}
 

@@ -1,8 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { lookupGenid, getContentHistory } from '@/lib/supabase'
+import { VERIFY_RATE_LIMIT, VERIFY_RATE_WINDOW_MS, checkInMemoryRateLimit, getClientIp } from '@/lib/limits'
 
-// Public endpoint: look up a GENID code to get creator info + content history
+// Public endpoint: look up a GENID code to get creator info + content
+// history. GENID codes are only 2 letters + 5 digits (~67M combinations)
+// and this had no rate limit at all — an IP-based limiter, same pattern as
+// /api/verify, at least bounds how fast that space can be brute-forced.
 export async function GET(req: NextRequest) {
+  const clientIp = getClientIp(req)
+  if (!checkInMemoryRateLimit(`lookup:${clientIp}`, VERIFY_RATE_LIMIT, VERIFY_RATE_WINDOW_MS)) {
+    return NextResponse.json(
+      { error: 'Too many lookup requests. Please wait a few minutes and try again.' },
+      { status: 429 }
+    )
+  }
+
   const code = req.nextUrl.searchParams.get('code')
 
   if (!code) {
