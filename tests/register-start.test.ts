@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
-import { MAGIC_LINK_RATE_LIMIT } from '@/lib/limits'
+import { MAGIC_LINK_RATE_LIMIT, REGISTRATION_IP_RATE_LIMIT } from '@/lib/limits'
 
 // POST /api/register/start (Sept 19 third fix) — the first step of
 // registration now only reserves the registry row and sends a
@@ -32,10 +32,13 @@ import { POST as registerStart } from '@/app/api/register/start/route'
 const EMAIL = 'new-creator@example.com'
 const FULL_NAME = 'New Creator'
 
-function req(body: unknown) {
+function req(body: unknown, ip?: string) {
   return new NextRequest('http://localhost/api/register/start', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(ip ? { 'x-forwarded-for': ip } : {}),
+    },
     body: JSON.stringify(body),
   })
 }
@@ -117,5 +120,23 @@ describe('POST /api/register/start', () => {
     expect(res.status).toBe(429)
     expect(createMagicLinkToken).not.toHaveBeenCalled()
     expect(sendRegistrationConfirmationEmail).not.toHaveBeenCalled()
+  })
+
+  // Sept 30 fix: the per-email limit above doesn't stop one IP driving that
+  // same budget across many different addresses. This uses the real
+  // checkInMemoryRateLimit/getClientIp (not mocked in this file) with a
+  // dedicated IP so it can't be affected by, or affect, the other tests'
+  // shared default ('unknown') bucket.
+  it('rejects with 429 once one IP exceeds the registration attempt limit, regardless of email', async () => {
+    const ip = '203.0.113.50'
+    mockRegistryChain(null)
+
+    for (let i = 0; i < REGISTRATION_IP_RATE_LIMIT; i++) {
+      const res = await registerStart(req({ fullName: FULL_NAME, email: `attempt-${i}@example.com` }, ip))
+      expect(res.status).toBe(200)
+    }
+
+    const blocked = await registerStart(req({ fullName: FULL_NAME, email: 'one-more@example.com' }, ip))
+    expect(blocked.status).toBe(429)
   })
 })

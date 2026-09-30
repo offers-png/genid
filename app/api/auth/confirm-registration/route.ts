@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { consumeMagicLinkToken, createMagicLinkToken, EMAIL_CONFIRMATION_TOKEN_COOKIE_NAME, MAGIC_LINK_TTL_SECONDS } from '@/lib/auth'
 import { lookupByEmail, supabaseAdmin } from '@/lib/supabase'
 import { env } from '@/lib/env'
+import { REGISTRATION_IP_RATE_LIMIT, REGISTRATION_IP_RATE_WINDOW_MS, checkInMemoryRateLimit, getClientIp } from '@/lib/limits'
 
 const EMAIL_CONFIRMATION_TOKEN_COOKIE_MAX_AGE = MAGIC_LINK_TTL_SECONDS
 
@@ -14,6 +15,16 @@ const EMAIL_CONFIRMATION_TOKEN_COOKIE_MAX_AGE = MAGIC_LINK_TTL_SECONDS
 // actually having confirmed this email, not on a bare client-supplied
 // string.
 export async function GET(req: NextRequest) {
+  // Sept 30 fix: this is the step right before POST /api/stripe/session
+  // creates a billed Stripe Identity session — an IP with access to many
+  // confirmable inboxes could otherwise mint an unbounded number of
+  // confirmation-proof tokens in a burst. No login exists yet here either,
+  // so IP is the only dimension available, same as /api/register/start.
+  const clientIp = getClientIp(req)
+  if (!checkInMemoryRateLimit(`confirm-registration:${clientIp}`, REGISTRATION_IP_RATE_LIMIT, REGISTRATION_IP_RATE_WINDOW_MS)) {
+    return NextResponse.redirect(new URL('/register?error=rate_limited', env.appUrl))
+  }
+
   const token = req.nextUrl.searchParams.get('token')
   if (!token) {
     return NextResponse.redirect(new URL('/register?error=missing_token', env.appUrl))

@@ -48,7 +48,10 @@ function CallbackContent() {
       }
 
       try {
-        const res = await fetch(`/api/genid/issue?email=${encodeURIComponent(email)}`)
+        // No email param — the server resolves identity from the
+        // registration-token cookie this browser already holds (Sept 30
+        // fix; see app/api/genid/issue/route.ts).
+        const res = await fetch('/api/genid/issue')
         if (res.ok) {
           const data: RegistrationResult = await res.json()
 

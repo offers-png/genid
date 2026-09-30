@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 import { EMAIL_CONFIRMATION_TOKEN_COOKIE_NAME } from '@/lib/auth'
+import { REGISTRATION_IP_RATE_LIMIT } from '@/lib/limits'
 
 // GET /api/auth/confirm-registration (Sept 19 third fix) — consuming this
 // link is what proves the registrant controls their email BEFORE Stripe
@@ -27,11 +28,11 @@ import { GET as confirmRegistration } from '@/app/api/auth/confirm-registration/
 const EMAIL = 'new-creator@example.com'
 const RAW_TOKEN = 'raw-confirmation-token'
 
-function req(token?: string) {
+function req(token?: string, ip?: string) {
   const url = token
     ? `http://localhost/api/auth/confirm-registration?token=${encodeURIComponent(token)}`
     : 'http://localhost/api/auth/confirm-registration'
-  return new NextRequest(url)
+  return new NextRequest(url, ip ? { headers: { 'x-forwarded-for': ip } } : undefined)
 }
 
 function mockConfirmUpdate(error: { message: string } | null = null) {
@@ -121,5 +122,25 @@ describe('GET /api/auth/confirm-registration', () => {
     const res = await confirmRegistration(req(RAW_TOKEN))
     expect(res.headers.get('location')).toContain('/register?error=server_error')
     expect(createMagicLinkToken).not.toHaveBeenCalled()
+  })
+
+  // Sept 30 fix: this is the step right before a billed Stripe Identity
+  // session gets created — an IP with access to many confirmable inboxes
+  // could otherwise mint an unbounded number of confirmation-proof tokens.
+  // Uses a dedicated IP (real checkInMemoryRateLimit/getClientIp, not
+  // mocked here) so it can't be affected by, or affect, the other tests'
+  // shared default ('unknown') bucket.
+  it('rejects with a redirect to /register?error=rate_limited once one IP exceeds the confirmation attempt limit', async () => {
+    const ip = '203.0.113.77'
+    vi.mocked(consumeMagicLinkToken).mockResolvedValue(null) // fastest path per attempt
+
+    for (let i = 0; i < REGISTRATION_IP_RATE_LIMIT; i++) {
+      const res = await confirmRegistration(req(`token-${i}`, ip))
+      expect(res.headers.get('location')).toContain('/register?error=invalid_or_expired')
+    }
+
+    const blocked = await confirmRegistration(req('one-more-token', ip))
+    expect(blocked.headers.get('location')).toContain('/register?error=rate_limited')
+    expect(consumeMagicLinkToken).toHaveBeenCalledTimes(REGISTRATION_IP_RATE_LIMIT)
   })
 })
