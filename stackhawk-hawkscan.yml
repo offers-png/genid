@@ -1,0 +1,31 @@
+app:
+  # Required by HawkScan — create an Application for "genid" in the
+  # StackHawk dashboard (Applications -> Add Application) and paste its
+  # applicationId here. The scan will not run without a real value.
+  applicationId: REPLACE_WITH_STACKHAWK_APPLICATION_ID
+  env: Production
+  host: https://genid.onrender.com
+
+  # First test run is deliberately conservative: these paths create real
+  # side effects on a live production app — a $1.50 Stripe Identity
+  # session per completed registration attempt, and real confirmation/
+  # sign-in emails sent via Resend to whatever addresses the active
+  # scanner guesses or fuzzes. Excluded here so the first scan is safe to
+  # run without surprise cost or spamming real inboxes. Remove/narrow
+  # these once you've reviewed a passive/discovery pass and want to scope
+  # in active testing of the registration and Stripe flows deliberately.
+  excludePaths:
+    - "/api/register/.*"
+    - "/api/stripe/.*"
+    - "/api/auth/confirm-registration.*"
+
+hawk:
+  spider:
+    base: true
+
+  # Passive-only for this first test run (no active attack payloads) —
+  # confirms connectivity, auth, and basic crawl coverage without risking
+  # side effects on production. Switch to an active scan policy once
+  # you've reviewed this run's findings and the exclusions above.
+  scanner:
+    activeScan: false
