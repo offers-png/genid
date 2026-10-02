@@ -1,7 +1,8 @@
+import { readLimitedFormData, UploadRequestError } from '@/lib/uploads'
 import { NextRequest, NextResponse } from 'next/server'
 // Note: stampedBuffer response uses native Response (not NextResponse) for binary compatibility
 import { embedGenid, hashBuffer, generateNotarySignature } from '@/lib/steganography'
-import { logContent, countRecentEmbedsForGenid } from '@/lib/supabase'
+import { logContent, reservePaidOperation } from '@/lib/supabase'
 import { getAuthenticatedRecord } from '@/lib/auth'
 import { stampOnBlockchain } from '@/lib/blockchain'
 import { env } from '@/lib/env'
@@ -11,8 +12,6 @@ import {
   ValidationError,
   withTimeout,
   EXTERNAL_CALL_TIMEOUT_MS,
-  EMBED_RATE_LIMIT,
-  EMBED_RATE_WINDOW_MS,
 } from '@/lib/limits'
 
 // POST multipart/form-data: { image }
@@ -23,13 +22,6 @@ import {
 // caller's identity now comes from their session cookie.
 export async function POST(req: NextRequest) {
   try {
-    const formData = await req.formData()
-    const imageFile = formData.get('image') as File
-
-    if (!imageFile) {
-      return NextResponse.json({ error: 'Image is required' }, { status: 400 })
-    }
-
     const record = await getAuthenticatedRecord(req)
     if (!record) {
       return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
@@ -38,8 +30,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Your identity has not been verified yet.' }, { status: 403 })
     }
 
-    const recentEmbeds = await countRecentEmbedsForGenid(record.genid_code, EMBED_RATE_WINDOW_MS)
-    if (recentEmbeds >= EMBED_RATE_LIMIT) {
+    const formData = await readLimitedFormData(req)
+    const imageFile = formData.get('image')
+
+    if (!(imageFile instanceof File)) {
+      return NextResponse.json({ error: 'Image is required' }, { status: 400 })
+    }
+
+    validateUploadSize(imageFile.size)
+    const reserved = await reservePaidOperation(record.genid_code, 'embed')
+    if (!reserved) {
       return NextResponse.json(
         { error: 'Too many stamping requests. Please wait a few minutes and try again.' },
         { status: 429 }
@@ -148,6 +148,8 @@ export async function POST(req: NextRequest) {
       },
     })
   } catch (err: unknown) {
+    if (err instanceof UploadRequestError) return NextResponse.json({ error: err.message }, { status: err.status })
+    if (err instanceof ValidationError) return NextResponse.json({ error: err.message }, { status: 400 })
     const message = err instanceof Error ? err.message : 'Embedding failed'
     return NextResponse.json({ error: message }, { status: 500 })
   }

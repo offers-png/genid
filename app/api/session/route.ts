@@ -4,7 +4,7 @@ import {
   createStepIfActive,
   listSessionsForGenid,
   getCertificatesForSessions,
-  countRecentGenerationsForGenid,
+  reservePaidOperation,
 } from '@/lib/supabase'
 import { getAuthenticatedRecord } from '@/lib/auth'
 import { uploadToSessionBucket, stepStoragePath } from '@/lib/storage'
@@ -78,8 +78,8 @@ export async function POST(req: NextRequest) {
 
     // Every generate/regenerate step calls a paid external model API —
     // bound spend per identity, not just validate input shape.
-    const recentGenerations = await countRecentGenerationsForGenid(record.genid_code, GENERATION_RATE_WINDOW_MS)
-    if (recentGenerations >= GENERATION_RATE_LIMIT) {
+    const reserved = await reservePaidOperation(record.genid_code, 'generation')
+    if (!reserved) {
       return NextResponse.json(
         { error: `Rate limit exceeded: max ${GENERATION_RATE_LIMIT} generations per ${GENERATION_RATE_WINDOW_MS / 60000} minutes. Please wait and try again.` },
         { status: 429 }

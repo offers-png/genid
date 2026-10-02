@@ -71,7 +71,7 @@ vi.mock('@/lib/supabase', () => ({
   ]),
   createStepIfActive: vi.fn(),
   isSessionNotActiveError: (err: unknown) => err instanceof Error && err.message.includes('SESSION_NOT_ACTIVE'),
-  countRecentGenerationsForGenid: vi.fn(async () => 0),
+  reservePaidOperation: vi.fn(async () => true),
 }))
 
 vi.mock('@/lib/storage', () => ({
@@ -96,7 +96,8 @@ vi.mock('@/lib/adapters/openai-image', () => ({
   },
 }))
 
-import { createStepIfActive } from '@/lib/supabase'
+import { openAiImageAdapter } from '@/lib/adapters/openai-image'
+import { createStepIfActive, reservePaidOperation } from '@/lib/supabase'
 import { uploadToSessionBucket, cleanupOrphanedPath } from '@/lib/storage'
 import { POST } from '@/app/api/session/[id]/step/route'
 
@@ -173,3 +174,15 @@ describe('POST /api/session/[id]/step — orphaned storage cleanup', () => {
     expect(cleanupOrphanedPath).not.toHaveBeenCalled()
   })
 })
+
+ it('rejects regeneration before paid work if no quota slot is available', async () => {
+   vi.mocked(reservePaidOperation).mockResolvedValueOnce(false)
+   expect((await callStep()).status).toBe(429)
+   expect(reservePaidOperation).toHaveBeenCalledWith('AB12345', 'generation')
+   expect(openAiImageAdapter.generateImage).not.toHaveBeenCalled()
+ })
+ it('fails closed before regeneration on database errors', async () => {
+   vi.mocked(reservePaidOperation).mockRejectedValueOnce(new Error('Quota unavailable'))
+   expect((await callStep()).status).toBe(500)
+   expect(openAiImageAdapter.generateImage).not.toHaveBeenCalled()
+ })

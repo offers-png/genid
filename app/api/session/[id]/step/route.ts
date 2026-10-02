@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSession, getSessionSteps, createStepIfActive, isSessionNotActiveError, countRecentGenerationsForGenid } from '@/lib/supabase'
+import { getSession, getSessionSteps, createStepIfActive, isSessionNotActiveError, reservePaidOperation } from '@/lib/supabase'
 import { getAuthenticatedRecord } from '@/lib/auth'
 import { uploadToSessionBucket, downloadFromSessionBucket, stepStoragePath, cleanupOrphanedPath } from '@/lib/storage'
 import { hashBuffer } from '@/lib/steganography'
@@ -77,8 +77,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
 
       // Every regenerate calls a paid external model API.
-      const recentGenerations = await countRecentGenerationsForGenid(caller.genid_code, GENERATION_RATE_WINDOW_MS)
-      if (recentGenerations >= GENERATION_RATE_LIMIT) {
+      const reserved = await reservePaidOperation(caller.genid_code, 'generation')
+      if (!reserved) {
         return NextResponse.json(
           { error: `Rate limit exceeded: max ${GENERATION_RATE_LIMIT} generations per ${GENERATION_RATE_WINDOW_MS / 60000} minutes. Please wait and try again.` },
           { status: 429 }

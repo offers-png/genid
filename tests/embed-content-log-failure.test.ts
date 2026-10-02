@@ -13,7 +13,7 @@ vi.mock('@/lib/supabase', () => ({
   logContent: vi.fn(),
   // Rate limiting (Sept 18 third follow-up) is covered by its own test
   // file — default to "under the limit" so it doesn't interfere here.
-  countRecentEmbedsForGenid: vi.fn().mockResolvedValue(0),
+  reservePaidOperation: vi.fn().mockResolvedValue(true),
 }))
 vi.mock('@/lib/blockchain', () => ({
   stampOnBlockchain: vi.fn(),

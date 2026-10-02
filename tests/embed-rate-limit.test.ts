@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { NextRequest } from 'next/server'
 import sharp from 'sharp'
-import { EMBED_RATE_LIMIT } from '@/lib/limits'
 
 beforeAll(() => {
   process.env.GENID_SIGNING_SECRET = 'test-genid-signing-secret'
@@ -12,14 +11,14 @@ vi.mock('@/lib/auth', () => ({
 }))
 vi.mock('@/lib/supabase', () => ({
   logContent: vi.fn(),
-  countRecentEmbedsForGenid: vi.fn(),
+  reservePaidOperation: vi.fn(),
 }))
 vi.mock('@/lib/blockchain', () => ({
   stampOnBlockchain: vi.fn(),
 }))
 
 import { getAuthenticatedRecord } from '@/lib/auth'
-import { logContent, countRecentEmbedsForGenid } from '@/lib/supabase'
+import { logContent, reservePaidOperation } from '@/lib/supabase'
 import { stampOnBlockchain } from '@/lib/blockchain'
 import { POST } from '@/app/api/embed/route'
 
@@ -63,7 +62,7 @@ beforeEach(() => {
 
 describe('POST /api/embed — rate limiting', () => {
   it('stamps normally when under the rate limit', async () => {
-    vi.mocked(countRecentEmbedsForGenid).mockResolvedValue(0)
+    vi.mocked(reservePaidOperation).mockResolvedValue(true)
 
     const res = await callEmbed()
     expect(res.status).toBe(200)
@@ -71,7 +70,7 @@ describe('POST /api/embed — rate limiting', () => {
   }, 10000)
 
   it('rejects with 429 once the limit is hit, without touching blockchain or content log', async () => {
-    vi.mocked(countRecentEmbedsForGenid).mockResolvedValue(EMBED_RATE_LIMIT)
+    vi.mocked(reservePaidOperation).mockResolvedValue(false)
 
     const res = await callEmbed()
     expect(res.status).toBe(429)
@@ -80,9 +79,23 @@ describe('POST /api/embed — rate limiting', () => {
   })
 
   it('allows stamping again once the count falls back under the limit', async () => {
-    vi.mocked(countRecentEmbedsForGenid).mockResolvedValue(EMBED_RATE_LIMIT - 1)
+    vi.mocked(reservePaidOperation).mockResolvedValue(true)
 
     const res = await callEmbed()
     expect(res.status).toBe(200)
   }, 10000)
 })
+
+ it('does not read an unauthenticated upload body', async () => {
+   vi.mocked(getAuthenticatedRecord).mockResolvedValue(null)
+   const req = new NextRequest('http://localhost/api/embed', { method: 'POST', body: 'not multipart' })
+   const res = await POST(req)
+   expect(res.status).toBe(401)
+   expect(req.bodyUsed).toBe(false)
+   expect(reservePaidOperation).not.toHaveBeenCalled()
+ })
+ it('blocks paid work when quota storage fails', async () => {
+   vi.mocked(reservePaidOperation).mockRejectedValue(new Error('Quota service unavailable'))
+   expect((await callEmbed()).status).toBe(500)
+   expect(stampOnBlockchain).not.toHaveBeenCalled()
+ })

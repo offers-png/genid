@@ -434,48 +434,19 @@ export async function getCertificateForSession(sessionId: string): Promise<Certi
   return data as CertificateRecord
 }
 
-// Rate limiting for generation requests (lib/limits.ts) — counts steps of
-// type 'generate'/'regenerate' created for this identity in the given
-// window, across ALL of its sessions, via PostgREST's embedded-resource
-// filter (`genid_sessions!inner`) rather than fetching every step client
-// side. Every generate/regenerate step calls a paid external model API, so
-// this is what actually bounds spend per identity, not just per session.
-export async function countRecentGenerationsForGenid(genidCode: string, sinceMs: number): Promise<number> {
-  const since = new Date(Date.now() - sinceMs).toISOString()
-  const { count, error } = await getAdmin()
-    .from('genid_steps')
-    .select('id, genid_sessions!inner(genid_code)', { count: 'exact', head: true })
-    .eq('genid_sessions.genid_code', genidCode)
-    .in('step_type', ['generate', 'regenerate'])
-    .gte('created_at', since)
-
-  if (error) {
-    console.error('Failed to count recent generations (failing open):', error.message)
-    return 0
+// Reserve before any paid work. Migration 016 serializes all requests for
+// an identity/budget, including requests from different app instances.
+// Failed attempts deliberately retain their slot until the window expires.
+export async function reservePaidOperation(genidCode: string, operation: 'generation' | 'embed'): Promise<boolean> {
+  const { data, error } = await getAdmin().rpc('reserve_paid_operation', {
+    p_genid_code: genidCode,
+    p_operation: operation,
+  })
+  if (error || typeof data !== 'boolean') {
+    console.error('Quota reservation failed:', error?.message ?? 'Invalid RPC response')
+    throw new Error('Quota service unavailable. Please try again later.')
   }
-  return count ?? 0
-}
-
-// Rate limiting for /api/embed (lib/limits.ts) — that route only checked
-// upload size/dimensions, not request rate; nothing stopped one identity
-// from repeatedly stamping (and repeatedly triggering a Polygon anchor
-// attempt) in a tight loop. genid_content_log already gets a row per
-// successful embed (logContent, called from /api/embed), so counting
-// against it needs no new table — same count-then-compare pattern as
-// countRecentGenerationsForGenid above.
-export async function countRecentEmbedsForGenid(genidCode: string, sinceMs: number): Promise<number> {
-  const since = new Date(Date.now() - sinceMs).toISOString()
-  const { count, error } = await getAdmin()
-    .from('genid_content_log')
-    .select('id', { count: 'exact', head: true })
-    .eq('genid_code', genidCode)
-    .gte('created_at', since)
-
-  if (error) {
-    console.error('Failed to count recent embeds (failing open):', error.message)
-    return 0
-  }
-  return count ?? 0
+  return data
 }
 
 export async function listSessionsForGenid(genidCode: string): Promise<SessionRecord[]> {

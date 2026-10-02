@@ -1,4 +1,4 @@
-import sharp from 'sharp'
+import sharp, { type Metadata } from 'sharp'
 
 // Resource limits (Sept 18 second follow-up, "Add resource limits").
 // Every one of these guards a real cost or resource-exhaustion path:
@@ -45,7 +45,7 @@ export function validateUploadSize(byteLength: number): void {
 // Catches both "absurdly large, will blow up memory/CPU in sharp" and
 // unreadable/corrupt files before they reach the actual LSB routines.
 export async function validateImageDimensions(buffer: Buffer): Promise<void> {
-  let meta: sharp.Metadata
+  let meta: Metadata
   try {
     meta = await sharp(buffer).metadata()
   } catch {
@@ -98,7 +98,7 @@ function pruneRateLimitBuckets(windowMs: number): void {
 // doesn't share state across horizontally-scaled instances — an accepted
 // tradeoff for a public endpoint with no login, not a guarantee against a
 // determined, distributed abuser. Authenticated endpoints use a DB-backed
-// count instead (e.g. countRecentGenerationsForGenid in lib/supabase.ts)
+// atomic reservation instead (reservePaidOperation in lib/supabase.ts)
 // so that limit actually holds across restarts and instances.
 export function checkInMemoryRateLimit(key: string, limit: number, windowMs: number): boolean {
   pruneRateLimitBuckets(windowMs)

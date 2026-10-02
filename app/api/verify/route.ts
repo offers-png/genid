@@ -1,3 +1,4 @@
+import { readLimitedFormData, UploadRequestError } from '@/lib/uploads'
 import { NextRequest, NextResponse } from 'next/server'
 import { extractGenid, hashBuffer, verifyNotarySignature } from '@/lib/steganography'
 import { lookupGenid, supabaseAdmin } from '@/lib/supabase'
@@ -29,13 +30,14 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const formData = await req.formData()
-    const imageFile = formData.get('image') as File
+    const formData = await readLimitedFormData(req)
+    const imageFile = formData.get('image')
 
-    if (!imageFile) {
+    if (!(imageFile instanceof File)) {
       return NextResponse.json({ error: 'Image file is required' }, { status: 400 })
     }
 
+    validateUploadSize(imageFile.size)
     const imageBuffer = Buffer.from(await imageFile.arrayBuffer())
     try {
       validateUploadSize(imageBuffer.length)
@@ -146,6 +148,8 @@ export async function POST(req: NextRequest) {
       message,
     })
   } catch (err: unknown) {
+    if (err instanceof UploadRequestError) return NextResponse.json({ error: err.message }, { status: err.status })
+    if (err instanceof ValidationError) return NextResponse.json({ error: err.message }, { status: 400 })
     const message = err instanceof Error ? err.message : 'Verification failed'
     return NextResponse.json({ error: message }, { status: 500 })
   }
