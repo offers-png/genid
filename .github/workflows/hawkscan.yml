@@ -1,0 +1,20 @@
+name: HawkScan DAST
+
+# Manual-only for now (workflow_dispatch) — this is a first test run against
+# live production (genid.onrender.com), not yet a scheduled job. Add a
+# `schedule:` trigger once the config in stackhawk-hawkscan.yml has been
+# reviewed and the applicationId is filled in.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  hawkscan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run HawkScan
+        uses: stackhawk/hawkscan-action@v2
+        with:
+          apiKey: ${{ secrets.HAWK_API_KEY }}
+          configurationFiles: stackhawk-hawkscan.yml
