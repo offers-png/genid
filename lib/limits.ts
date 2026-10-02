@@ -124,6 +124,28 @@ export function getClientIp(req: { headers: { get(name: string): string | null }
   return req.headers.get('x-real-ip') ?? 'unknown'
 }
 
+// CSRF defense for anonymous, pre-login POST endpoints (StackHawk "Anti
+// CSRF Tokens Scanner" finding, Oct 2026 — flagged on /register and
+// /login's forms). Those endpoints have no session cookie yet to protect
+// with a SameSite attribute or a server-issued token, so this checks the
+// request actually came from this app's own pages rather than a
+// cross-origin page auto-submitting one. Real browsers send Origin (and/or
+// Referer) on same-origin POSTs; a mismatch on either is a clear forgery
+// signal. Neither header present at all is left to pass — some privacy
+// proxies/extensions strip both on otherwise-legitimate requests, and
+// rejecting those would turn a defense-in-depth check (these routes are
+// JSON-body, no-CORS, so a true cross-origin form POST can't reach them
+// anyway) into a way to break real users' registration/sign-in.
+export function isSameOriginRequest(req: { headers: { get(name: string): string | null } }, appUrl: string): boolean {
+  const origin = req.headers.get('origin')
+  if (origin) return origin === appUrl
+
+  const referer = req.headers.get('referer')
+  if (referer) return referer.startsWith(`${appUrl}/`) || referer === appUrl
+
+  return true
+}
+
 // Races a promise against a timeout so a hung external call (model
 // provider, blockchain RPC) can't hold a request open indefinitely.
 export async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {

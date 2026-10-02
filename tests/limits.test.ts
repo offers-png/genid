@@ -5,11 +5,18 @@ import {
   validateUploadSize,
   validateImageDimensions,
   withTimeout,
+  isSameOriginRequest,
   ValidationError,
   PROMPT_MAX_LENGTH,
   MAX_UPLOAD_BYTES,
   MAX_IMAGE_DIMENSION_PX,
 } from '@/lib/limits'
+
+const APP_URL = 'https://genid.onrender.com'
+
+function reqWithHeaders(headers: Record<string, string>) {
+  return { headers: { get: (name: string) => headers[name.toLowerCase()] ?? null } }
+}
 
 describe('validatePromptText', () => {
   it('accepts and trims a normal prompt', () => {
@@ -70,6 +77,34 @@ describe('validateImageDimensions', () => {
       .png()
       .toBuffer()
     await expect(validateImageDimensions(buffer)).rejects.toThrow(ValidationError)
+  })
+})
+
+describe('isSameOriginRequest', () => {
+  it('accepts a matching Origin header', () => {
+    expect(isSameOriginRequest(reqWithHeaders({ origin: APP_URL }), APP_URL)).toBe(true)
+  })
+
+  it('rejects a mismatched Origin header', () => {
+    expect(isSameOriginRequest(reqWithHeaders({ origin: 'https://evil.example' }), APP_URL)).toBe(false)
+  })
+
+  it('falls back to Referer when Origin is absent, accepting a matching one', () => {
+    expect(isSameOriginRequest(reqWithHeaders({ referer: `${APP_URL}/register` }), APP_URL)).toBe(true)
+  })
+
+  it('rejects a mismatched Referer when Origin is absent', () => {
+    expect(isSameOriginRequest(reqWithHeaders({ referer: 'https://evil.example/register' }), APP_URL)).toBe(false)
+  })
+
+  it('allows a request with neither header (fail-open, not the sole defense)', () => {
+    expect(isSameOriginRequest(reqWithHeaders({}), APP_URL)).toBe(true)
+  })
+
+  it('prefers Origin over Referer when both are present', () => {
+    expect(
+      isSameOriginRequest(reqWithHeaders({ origin: 'https://evil.example', referer: `${APP_URL}/register` }), APP_URL)
+    ).toBe(false)
   })
 })
 
