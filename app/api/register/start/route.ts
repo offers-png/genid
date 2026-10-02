@@ -11,6 +11,7 @@ import {
   REGISTRATION_IP_RATE_WINDOW_MS,
   checkInMemoryRateLimit,
   getClientIp,
+  isSameOriginRequest,
 } from '@/lib/limits'
 
 // POST { fullName, email } — start of registration (Sept 19 third fix).
@@ -32,6 +33,13 @@ import {
 // that link is clicked — see GET /api/auth/confirm-registration.
 export async function POST(req: NextRequest) {
   try {
+    // Oct 2026 fix: this form has no session cookie to protect with
+    // SameSite (there's no login yet at this step), so a cross-origin
+    // Origin/Referer is the forgery signal instead — see isSameOriginRequest.
+    if (!isSameOriginRequest(req, env.appUrl)) {
+      return NextResponse.json({ error: 'Cross-origin request rejected.' }, { status: 403 })
+    }
+
     // Sept 30 fix: MAGIC_LINK_RATE_LIMIT below caps requests per EMAIL —
     // nothing stopped one IP from driving that same budget across many
     // different (disposable) addresses, each a real Resend send and a

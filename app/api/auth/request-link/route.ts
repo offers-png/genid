@@ -3,7 +3,7 @@ import { lookupByEmail } from '@/lib/supabase'
 import { createMagicLinkToken, countRecentMagicLinkRequestsForEmail } from '@/lib/auth'
 import { sendMagicLinkEmail } from '@/lib/mailer'
 import { env } from '@/lib/env'
-import { MAGIC_LINK_RATE_LIMIT, MAGIC_LINK_RATE_WINDOW_MS } from '@/lib/limits'
+import { MAGIC_LINK_RATE_LIMIT, MAGIC_LINK_RATE_WINDOW_MS, isSameOriginRequest } from '@/lib/limits'
 
 // POST { email } — start of the magic-link sign-in flow (Punch List #4).
 // Always returns the same generic response regardless of whether the email
@@ -17,6 +17,13 @@ import { MAGIC_LINK_RATE_LIMIT, MAGIC_LINK_RATE_WINDOW_MS } from '@/lib/limits'
 // usable to spam a registered user's inbox or burn the Resend quota.
 export async function POST(req: NextRequest) {
   try {
+    // Oct 2026 fix: same cross-origin forgery check as /api/register/start
+    // — no session cookie exists yet at sign-in either, so Origin/Referer
+    // is the signal (see isSameOriginRequest in lib/limits.ts).
+    if (!isSameOriginRequest(req, env.appUrl)) {
+      return NextResponse.json({ error: 'Cross-origin request rejected.' }, { status: 403 })
+    }
+
     const { email } = await req.json()
     if (!email || typeof email !== 'string') {
       return NextResponse.json({ error: 'email is required' }, { status: 400 })
