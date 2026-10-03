@@ -4,6 +4,7 @@ import { createMagicLinkToken, countRecentMagicLinkRequestsForEmail } from '@/li
 import { sendMagicLinkEmail } from '@/lib/mailer'
 import { env } from '@/lib/env'
 import { MAGIC_LINK_RATE_LIMIT, MAGIC_LINK_RATE_WINDOW_MS, isSameOriginRequest } from '@/lib/limits'
+import { isValidCsrfToken } from '@/lib/csrf'
 
 // POST { email } — start of the magic-link sign-in flow (Punch List #4).
 // Always returns the same generic response regardless of whether the email
@@ -24,7 +25,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Cross-origin request rejected.' }, { status: 403 })
     }
 
-    const { email } = await req.json()
+    const { email, csrfToken } = await req.json()
+
+    // Oct 2026 fix: double-submit CSRF token (see proxy.ts / lib/csrf.ts).
+    if (!isValidCsrfToken(req, csrfToken)) {
+      return NextResponse.json({ error: 'Your session has expired. Please reload the page and try again.' }, { status: 403 })
+    }
+
     if (!email || typeof email !== 'string') {
       return NextResponse.json({ error: 'email is required' }, { status: 400 })
     }

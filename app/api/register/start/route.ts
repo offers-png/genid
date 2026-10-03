@@ -13,6 +13,7 @@ import {
   getClientIp,
   isSameOriginRequest,
 } from '@/lib/limits'
+import { isValidCsrfToken } from '@/lib/csrf'
 
 // POST { fullName, email } — start of registration (Sept 19 third fix).
 // Previously, submitting this form went straight to
@@ -54,7 +55,14 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const { fullName, email } = await req.json()
+    const { fullName, email, csrfToken } = await req.json()
+
+    // Oct 2026 fix: double-submit CSRF token (see proxy.ts / lib/csrf.ts) —
+    // confirms this submission actually came from a page load of /register
+    // itself, not a value a cross-origin page guessed or replayed.
+    if (!isValidCsrfToken(req, csrfToken)) {
+      return NextResponse.json({ error: 'Your session has expired. Please reload the page and try again.' }, { status: 403 })
+    }
 
     if (!fullName || !email) {
       return NextResponse.json({ error: 'Name and email are required' }, { status: 400 })
