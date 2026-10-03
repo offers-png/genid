@@ -6,7 +6,9 @@ name: HawkScan DAST
 # reviewed and the applicationId is filled in.
 on:
   workflow_dispatch: {}
-
+permissions:
+  contents: read
+  
 jobs:
   hawkscan:
     runs-on: ubuntu-latest

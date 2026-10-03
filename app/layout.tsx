@@ -2,6 +2,9 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import './globals.css'
 
+// CSP nonces must be generated at request time, never cached in static HTML.
+export const dynamic = 'force-dynamic'
+
 export const metadata: Metadata = {
   title: 'GENID Protocol',
   description: 'Cryptographic AI Content Identity — Patent Pending',

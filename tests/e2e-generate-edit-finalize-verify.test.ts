@@ -106,7 +106,7 @@ vi.mock('@/lib/supabase', () => ({
     steps.set(row.id, row)
     return row
   }),
-  countRecentGenerationsForGenid: vi.fn(async () => 0),
+  reservePaidOperation: vi.fn(async () => true),
   tryBeginFinalizing: vi.fn(async (sessionId: string) => {
     const session = sessions.get(sessionId)
     if (!session || session.status !== 'active') return { acquired: false, token: null }
