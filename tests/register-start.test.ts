@@ -31,15 +31,21 @@ import { POST as registerStart } from '@/app/api/register/start/route'
 
 const EMAIL = 'new-creator@example.com'
 const FULL_NAME = 'New Creator'
+const CSRF_TOKEN = 'test-csrf-token-0123456789'
 
-function req(body: unknown, ip?: string) {
+// Every test below exercises the route's own logic, not the CSRF check
+// itself (that's covered separately below) — so this helper carries a
+// valid double-submit pair (cookie + body field) by default. Tests that
+// need to override csrfToken can still pass it in `body`.
+function req(body: Record<string, unknown>, ip?: string) {
   return new NextRequest('http://localhost/api/register/start', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      Cookie: `genid_csrf=${CSRF_TOKEN}`,
       ...(ip ? { 'x-forwarded-for': ip } : {}),
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ csrfToken: CSRF_TOKEN, ...body }),
   })
 }
 
@@ -138,5 +144,17 @@ describe('POST /api/register/start', () => {
 
     const blocked = await registerStart(req({ fullName: FULL_NAME, email: 'one-more@example.com' }, ip))
     expect(blocked.status).toBe(429)
+  })
+
+  it('rejects with 403 when the CSRF token is missing or does not match the cookie', async () => {
+    mockRegistryChain(null)
+
+    const noToken = await registerStart(req({ fullName: FULL_NAME, email: EMAIL, csrfToken: undefined }))
+    expect(noToken.status).toBe(403)
+
+    const wrongToken = await registerStart(req({ fullName: FULL_NAME, email: EMAIL, csrfToken: 'not-the-cookie-value' }))
+    expect(wrongToken.status).toBe(403)
+
+    expect(createMagicLinkToken).not.toHaveBeenCalled()
   })
 })

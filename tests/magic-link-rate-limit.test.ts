@@ -19,12 +19,16 @@ import { sendMagicLinkEmail } from '@/lib/mailer'
 import { POST } from '@/app/api/auth/request-link/route'
 
 const EMAIL = 'user@example.com'
+const CSRF_TOKEN = 'test-csrf-token-0123456789'
 
 function req(email: unknown) {
   return new NextRequest('http://localhost/api/auth/request-link', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email }),
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: `genid_csrf=${CSRF_TOKEN}`,
+    },
+    body: JSON.stringify({ email, csrfToken: CSRF_TOKEN }),
   })
 }
 
@@ -94,5 +98,19 @@ describe('POST /api/auth/request-link — rate limiting', () => {
     const res = await POST(req(EMAIL))
     expect(res.status).toBe(200)
     expect(sendMagicLinkEmail).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects with 403 when the CSRF token does not match the cookie', async () => {
+    vi.mocked(countRecentMagicLinkRequestsForEmail).mockResolvedValue(0)
+
+    const mismatched = new NextRequest('http://localhost/api/auth/request-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: `genid_csrf=${CSRF_TOKEN}` },
+      body: JSON.stringify({ email: EMAIL, csrfToken: 'wrong-token' }),
+    })
+
+    const res = await POST(mismatched)
+    expect(res.status).toBe(403)
+    expect(sendMagicLinkEmail).not.toHaveBeenCalled()
   })
 })
