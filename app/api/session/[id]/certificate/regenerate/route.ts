@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession, getSessionSteps, getCertificateForSession, lookupGenid } from '@/lib/supabase'
-import { getAuthenticatedRecord } from '@/lib/auth'
+import { getCallerRecord } from '@/lib/apiKeys'
 import { uploadToSessionBucket } from '@/lib/storage'
 import { generateCertificatePdf, buildCertificateSteps } from '@/lib/certificate'
 import { env } from '@/lib/env'
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   try {
     const { id: sessionId } = await params
 
-    const caller = await getAuthenticatedRecord(req)
+    const caller = await getCallerRecord(req)
     if (!caller) {
       return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
     }

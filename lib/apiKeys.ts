@@ -1,5 +1,7 @@
 import crypto from 'crypto'
+import type { NextRequest } from 'next/server'
 import { getAdmin, lookupGenid, type GenidRecord } from './supabase'
+import { getAuthenticatedRecord } from './auth'
 
 // External developer API keys (Oct 2026) — a second auth method alongside
 // the magic-link session cookie (lib/auth.ts), for callers with no browser
@@ -107,4 +109,18 @@ export async function resolveApiKey(authorizationHeader: string | null): Promise
   )
 
   return lookupGenid(keyRow.genid_code)
+}
+
+// Resolves the caller from EITHER auth method — session cookie first (the
+// cheaper, more common path for the browser app; an API key lookup only
+// happens if there's no cookie), falling back to an Authorization: Bearer
+// key. Used by every route in the session-based certification pipeline
+// (Oct 2026 "expose full pipeline via API key" — session create/list,
+// detail, step, finalize, certificate, c2pa-export) that the browser app
+// and an external API caller now both reach through the exact same
+// endpoints, just with a different credential.
+export async function getCallerRecord(req: NextRequest): Promise<GenidRecord | null> {
+  const viaSession = await getAuthenticatedRecord(req)
+  if (viaSession) return viaSession
+  return resolveApiKey(req.headers.get('authorization'))
 }

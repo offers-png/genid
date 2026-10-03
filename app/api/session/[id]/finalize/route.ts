@@ -14,7 +14,7 @@ import {
   recordPolygonAnchorTx,
   type StepRecord,
 } from '@/lib/supabase'
-import { getAuthenticatedRecord } from '@/lib/auth'
+import { getCallerRecord } from '@/lib/apiKeys'
 import { downloadFromSessionBucket, uploadToSessionBucket, c2paExportStoragePath } from '@/lib/storage'
 import { generateCertificatePdf, buildCertificateSteps, type CertificateStep } from '@/lib/certificate'
 import { computeSessionRootHash } from '@/lib/chain'
@@ -76,7 +76,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const body = await req.json().catch(() => ({}))
     const requestedStepId = (body as { stepId?: string })?.stepId
 
-    const caller = await getAuthenticatedRecord(req)
+    const caller = await getCallerRecord(req)
     if (!caller) {
       throw new FinalizeError('Sign in required.', 401)
     }

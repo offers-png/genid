@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession, getSessionSteps } from '@/lib/supabase'
-import { getAuthenticatedRecord } from '@/lib/auth'
+import { getCallerRecord } from '@/lib/apiKeys'
 import { downloadFromSessionBucket } from '@/lib/storage'
 
 // GET — serves one step's CURRENT image bytes directly, so the client can
@@ -17,7 +17,7 @@ export async function GET(
 ) {
   const { id: sessionId, stepId } = await params
 
-  const caller = await getAuthenticatedRecord(req)
+  const caller = await getCallerRecord(req)
   if (!caller) {
     return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
   }

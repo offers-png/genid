@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/supabase'
-import { getAuthenticatedRecord } from '@/lib/auth'
+import { getCallerRecord } from '@/lib/apiKeys'
 import { downloadFromSessionBucket, c2paExportStoragePath } from '@/lib/storage'
 
 // GET — the final image with its C2PA/CAWG manifest embedded. Same
@@ -12,7 +12,7 @@ import { downloadFromSessionBucket, c2paExportStoragePath } from '@/lib/storage'
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id: sessionId } = await params
 
-  const caller = await getAuthenticatedRecord(req)
+  const caller = await getCallerRecord(req)
   if (!caller) {
     return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
   }
