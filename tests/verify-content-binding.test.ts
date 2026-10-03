@@ -49,10 +49,17 @@ function mockSingle(row: unknown) {
   } as unknown as ReturnType<typeof supabaseAdmin.from>)
 }
 
+const CSRF_TOKEN = 'test-csrf-token-0123456789'
+
 async function callVerify(): Promise<{ status: number; body: Record<string, unknown> }> {
   const formData = new FormData()
   formData.append('image', new File([new Uint8Array([1, 2, 3])], 'test.png', { type: 'image/png' }))
-  const req = new NextRequest('http://localhost/api/verify', { method: 'POST', body: formData })
+  formData.append('csrfToken', CSRF_TOKEN)
+  const req = new NextRequest('http://localhost/api/verify', {
+    method: 'POST',
+    body: formData,
+    headers: { Cookie: `genid_csrf=${CSRF_TOKEN}` },
+  })
   const res = await POST(req)
   return { status: res.status, body: await res.json() }
 }

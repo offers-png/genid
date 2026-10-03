@@ -30,13 +30,16 @@ vi.mock('@/lib/limits', async () => {
 
 import { POST } from '@/app/api/verify/route'
 
+const CSRF_TOKEN = 'test-csrf-token-0123456789'
+
 function callVerify(ip: string) {
   const formData = new FormData()
   formData.append('image', new File([new Uint8Array([1, 2, 3])], 'test.png', { type: 'image/png' }))
+  formData.append('csrfToken', CSRF_TOKEN)
   const req = new NextRequest('http://localhost/api/verify', {
     method: 'POST',
     body: formData,
-    headers: { 'x-forwarded-for': ip },
+    headers: { 'x-forwarded-for': ip, Cookie: `genid_csrf=${CSRF_TOKEN}` },
   })
   return POST(req)
 }
@@ -70,5 +73,18 @@ describe('POST /api/verify — rate limiting', () => {
     const freshIp = '10.0.0.4'
     const allowed = await callVerify(freshIp)
     expect(allowed.status).toBe(200)
+  })
+
+  it('rejects with 403 when the CSRF token does not match the cookie', async () => {
+    const formData = new FormData()
+    formData.append('image', new File([new Uint8Array([1, 2, 3])], 'test.png', { type: 'image/png' }))
+    formData.append('csrfToken', 'wrong-token')
+    const req = new NextRequest('http://localhost/api/verify', {
+      method: 'POST',
+      body: formData,
+      headers: { 'x-forwarded-for': '10.0.0.5', Cookie: `genid_csrf=${CSRF_TOKEN}` },
+    })
+    const res = await POST(req)
+    expect(res.status).toBe(403)
   })
 })

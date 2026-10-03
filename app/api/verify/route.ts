@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { extractGenid, hashBuffer, verifyNotarySignature } from '@/lib/steganography'
 import { lookupGenid, supabaseAdmin } from '@/lib/supabase'
 import { env } from '@/lib/env'
+import { isValidCsrfToken } from '@/lib/csrf'
 import {
   validateUploadSize,
   validateImageDimensions,
@@ -31,6 +32,15 @@ export async function POST(req: NextRequest) {
     }
 
     const formData = await readLimitedFormData(req)
+
+    // Oct 2026 fix: double-submit CSRF token (see proxy.ts / lib/csrf.ts).
+    // Scanner-driven, not risk-driven — this endpoint is public/anonymous
+    // with no session-bound side effect, so there's no real forgery to
+    // protect against here, just StackHawk's markup check.
+    if (!isValidCsrfToken(req, formData.get('csrfToken'))) {
+      return NextResponse.json({ error: 'Your session has expired. Please reload the page and try again.' }, { status: 403 })
+    }
+
     const imageFile = formData.get('image')
 
     if (!(imageFile instanceof File)) {

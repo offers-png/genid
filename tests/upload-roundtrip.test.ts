@@ -17,10 +17,20 @@ import { POST as verify } from '@/app/api/verify/route'
 import { MAX_UPLOAD_BYTES } from '@/lib/limits'
 import { MAX_MULTIPART_BYTES } from '@/lib/uploads'
 
+const CSRF_TOKEN = 'test-csrf-token-0123456789'
+
+// csrfToken/Cookie are only checked by /api/verify (not /api/embed, which
+// authenticates via session instead), but setting them unconditionally
+// here is harmless for embed and keeps this one helper shared by both.
 function request(path: string, bytes: Uint8Array, type = 'image/png') {
   const form = new FormData()
   form.set('image', new File([new Uint8Array(bytes)], 'sample', { type }))
-  return new NextRequest(`http://localhost/api/${path}`, { method: 'POST', body: form })
+  form.set('csrfToken', CSRF_TOKEN)
+  return new NextRequest(`http://localhost/api/${path}`, {
+    method: 'POST',
+    body: form,
+    headers: { Cookie: `genid_csrf=${CSRF_TOKEN}` },
+  })
 }
 beforeAll(() => { process.env.GENID_SIGNING_SECRET = 'roundtrip-test-secret' })
 beforeEach(() => { state.log = null })
