@@ -10,8 +10,8 @@ Universal identity infrastructure for AI-generated content. GENID Protocol crypt
 2. **Receive GENID** — A unique code (e.g. SA11212) is issued, tied to their verified identity
 3. **Create a session** (`/session`) — Generate an image inside GenID's own pipeline. The prompt, model, output, hash, and HMAC-SHA256 signature are captured automatically at the moment of creation — no upload step. Regenerate with a new prompt or edit the current version (crop, color adjust) as many times as you like; nothing is ever deleted, and every version is chained to the one before it. Pick which version is final and hit Finalize to get a signed Authorship Certificate (PDF) covering the full version history, a session root hash anchored to Polygon, and a C2PA/CAWG manifest embedded in the exported image.
 4. **Find it again** (`/dashboard`) — Every session shows up here by registered email: status, dates, a link back in, and a certificate download once one exists.
-5. **Stamp** (`/embed`, legacy) — Upload an already-made AI image; GENID + notary signature embedded invisibly in pixels using LSB steganography. Kept for content generated outside GenID.
-6. **Verify** (`/verify` for stamped images, `/session/verify/[id]` for sessions) — Anyone can check whether a signature is valid, a hash chain is intact, or a C2PA manifest is present — no GenID account required.
+5. **Stamp** (`/embed`, legacy) — Upload an already-made AI image; GENID + notary signature embedded invisibly in pixels using LSB steganography. Kept for content generated outside GenID. Also available as a direct API call (`POST /api/v1/stamp`, API-key auth) for an agency, plugin, or platform to call without a browser — see [`API.md`](./API.md).
+6. **Verify** (`/verify` for stamped images, `/session/verify/[id]` for sessions) — Anyone can check whether a signature is valid, a hash chain is intact, or a C2PA manifest is present — no GenID account required. Also available as `POST /api/v1/verify` (no auth), see [`API.md`](./API.md).
 
 ### C2PA / CAWG trust status
 
@@ -189,6 +189,19 @@ true multi-connection concurrency.
 See [`DATA_RETENTION.md`](./DATA_RETENTION.md) for what's stored, how long,
 and what compression after finalize does and doesn't change. A basic
 per-session storage-usage view is at `/dashboard/storage`.
+
+## External API
+
+`POST /api/v1/stamp` and `POST /api/v1/verify` expose the stamp/verify flow
+(not the full in-app session/generation flow) to external callers — an
+agency, plugin, or platform integrating directly. API keys are generated
+and revoked from `/dashboard/api-keys` (requires a Stripe-identity-verified
+GENID), hashed at rest (`genid_api_keys`, migration 017) the same way
+magic-link/registration tokens are. Stamping via an API key shares the same
+per-identity rate limit (`reserve_paid_operation`, migration 016) as the
+browser dashboard — one identity's quota, not a separate budget per key.
+Full reference, request/response shapes, error codes, and a working
+two-command demo script: [`API.md`](./API.md).
 
 ## License
 

@@ -166,6 +166,9 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">Your Sessions</h2>
               <div className="flex items-center gap-4">
+                <Link href="/dashboard/api-keys" className="text-sm text-gray-400 hover:text-gray-300">
+                  API keys
+                </Link>
                 <Link href="/dashboard/storage" className="text-sm text-gray-400 hover:text-gray-300">
                   Storage usage
                 </Link>

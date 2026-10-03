@@ -1,18 +1,9 @@
 import { readLimitedFormData, UploadRequestError } from '@/lib/uploads'
 import { NextRequest, NextResponse } from 'next/server'
 // Note: stampedBuffer response uses native Response (not NextResponse) for binary compatibility
-import { embedGenid, hashBuffer, generateNotarySignature } from '@/lib/steganography'
-import { logContent, reservePaidOperation } from '@/lib/supabase'
 import { getAuthenticatedRecord } from '@/lib/auth'
-import { stampOnBlockchain } from '@/lib/blockchain'
-import { env } from '@/lib/env'
-import {
-  validateUploadSize,
-  validateImageDimensions,
-  ValidationError,
-  withTimeout,
-  EXTERNAL_CALL_TIMEOUT_MS,
-} from '@/lib/limits'
+import { stampImageForIdentity, QuotaExceededError, ContentLogWriteError } from '@/lib/stamping'
+import { validateUploadSize, validateImageDimensions, ValidationError } from '@/lib/limits'
 
 // POST multipart/form-data: { image }
 // Returns: the steganographically-stamped image with embedded notary signature.
@@ -20,6 +11,12 @@ import {
 // stamp with — anyone who knew a target's email could embed content (and
 // trigger a Polygon anchor transaction) attributed to that identity. The
 // caller's identity now comes from their session cookie.
+//
+// The actual stamping work (quota reservation, embed, blockchain anchor,
+// content-log write) lives in lib/stamping.ts, shared with POST
+// /api/v1/stamp (Oct 2026) — this route is now just: authenticate via
+// session cookie, validate the upload, call the shared function, and
+// format the binary response the browser form expects.
 export async function POST(req: NextRequest) {
   try {
     const record = await getAuthenticatedRecord(req)
@@ -38,13 +35,6 @@ export async function POST(req: NextRequest) {
     }
 
     validateUploadSize(imageFile.size)
-    const reserved = await reservePaidOperation(record.genid_code, 'embed')
-    if (!reserved) {
-      return NextResponse.json(
-        { error: 'Too many stamping requests. Please wait a few minutes and try again.' },
-        { status: 429 }
-      )
-    }
 
     const imageBuffer = Buffer.from(await imageFile.arrayBuffer())
     try {
@@ -55,84 +45,12 @@ export async function POST(req: NextRequest) {
       throw err
     }
 
-    const originalHash = hashBuffer(imageBuffer)
-    const timestamp = Math.floor(Date.now() / 1000)
-
-    const signingSecret = env.genidSigningSecret
-    const notaryPayload = generateNotarySignature(
+    const { stampedBuffer, stampedHash, txHash, timestamp } = await stampImageForIdentity(
       record.genid_code,
-      originalHash,
-      timestamp,
-      signingSecret
-    )
-
-    const stampedBuffer = await embedGenid(
       imageBuffer,
-      record.genid_code,
       imageFile.type,
-      notaryPayload
+      imageFile.name
     )
-    const stampedHash = hashBuffer(stampedBuffer)
-
-    let txHash: string | null = null
-    try {
-      const stamp = await withTimeout(
-        stampOnBlockchain({
-          genidCode: record.genid_code,
-          contentHash: stampedHash,
-          fileName: imageFile.name,
-        }),
-        EXTERNAL_CALL_TIMEOUT_MS,
-        'Polygon anchor'
-      )
-      txHash = stamp.txHash
-    } catch (blockchainErr) {
-      console.error('Blockchain stamp failed (non-fatal):', blockchainErr)
-    }
-
-    // This row is the authenticated content record /api/verify's
-    // content-binding check requires (Punch List #2 follow-up) — a stamped
-    // image whose log write fails can never pass verification, no matter
-    // how valid its embedded signature is. Returning the image anyway
-    // would hand back something that LOOKS successfully stamped but is
-    // silently unverifiable forever after. Retry a few times against a
-    // transient DB blip before giving up — the OpenAI/blockchain work
-    // already spent to get here shouldn't be thrown away for a blip that
-    // usually clears in milliseconds.
-    let logEntry = null
-    let lastLogError: unknown = null
-    for (let attempt = 1; attempt <= 3 && !logEntry; attempt++) {
-      try {
-        logEntry = await logContent({
-          genid_code: record.genid_code,
-          content_hash: stampedHash,
-          file_name: imageFile.name,
-          file_type: imageFile.type,
-          platform: 'GENID Protocol',
-          blockchain_tx_hash: txHash,
-          blockchain_network: 'polygon',
-          notary_signature: notaryPayload,
-          notary_timestamp: timestamp,
-          notary_hash: originalHash,
-        })
-      } catch (err) {
-        lastLogError = err
-      }
-      if (!logEntry && attempt < 3) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 200))
-      }
-    }
-
-    if (!logEntry) {
-      console.error('Failed to record content log after retries — refusing to return the stamped image:', lastLogError)
-      return NextResponse.json(
-        {
-          error:
-            'Stamping succeeded but the record could not be saved, so this image would never pass verification. Please try again.',
-        },
-        { status: 500 }
-      )
-    }
 
     const originalBase = imageFile.name.replace(/\.[^.]+$/, '')
     const safeBase = originalBase.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 40)
@@ -150,6 +68,8 @@ export async function POST(req: NextRequest) {
   } catch (err: unknown) {
     if (err instanceof UploadRequestError) return NextResponse.json({ error: err.message }, { status: err.status })
     if (err instanceof ValidationError) return NextResponse.json({ error: err.message }, { status: 400 })
+    if (err instanceof QuotaExceededError) return NextResponse.json({ error: err.message }, { status: 429 })
+    if (err instanceof ContentLogWriteError) return NextResponse.json({ error: err.message }, { status: 500 })
     const message = err instanceof Error ? err.message : 'Embedding failed'
     return NextResponse.json({ error: message }, { status: 500 })
   }
