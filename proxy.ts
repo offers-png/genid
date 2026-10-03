@@ -12,20 +12,26 @@ import { CSRF_COOKIE_NAME, CSRF_COOKIE_MAX_AGE_SECONDS, CSRF_TOKEN_HEADER_NAME }
 //    SECURITY-FIX-HANDOFF.md): every matched response gets a strict,
 //    per-request-nonce'd Content-Security-Policy, replacing the static
 //    fallback policy next.config.ts sets for anything this proxy doesn't
-//    touch. style-src keeps 'unsafe-inline' deliberately — the dashboard
-//    storage-usage bar (app/dashboard/storage/page.tsx) sets a computed
-//    width via a React inline style attribute, which nonces can't cover
-//    (CSP has no nonce mechanism for the style="" attribute itself, only
-//    for <style> elements) — narrowing further would need converting that
-//    one spot to a <style nonce> block instead.
+//    touch. style-src no longer needs 'unsafe-inline' (Oct 2026 HawkScan
+//    follow-up) — the one inline style={{}} attribute in the app (the
+//    dashboard storage-usage bar) was converted to a fixed set of Tailwind
+//    width classes (app/dashboard/storage/page.tsx), so there's nothing
+//    left that needs it. Re-grep the app for `style={{` before ever
+//    reintroducing this exception — CSP has no nonce mechanism for the
+//    style="" attribute itself (only for <style> elements), so a new
+//    inline style attribute would have no narrower fix available.
 //
-// 2. CSRF double-submit token, GET /register and GET /login only: issues
-//    a token as an httpOnly cookie, forwarded as a request header so each
-//    page's Server Component can render it into a hidden <input> in the
-//    initial HTML (see lib/csrf.ts for why that has to happen server-side
-//    rather than client-side). This never touches Content-Security-Policy
-//    — it reuses whatever this function already produces for every path,
-//    so there's no second, competing CSP header in play.
+// 2. CSRF double-submit token, GET /register, /login, and /verify only:
+//    issues a token as an httpOnly cookie, forwarded as a request header
+//    so each page's Server Component can render it into a hidden <input>
+//    in the initial HTML (see lib/csrf.ts for why that has to happen
+//    server-side rather than client-side). This never touches
+//    Content-Security-Policy — it reuses whatever this function already
+//    produces for every path, so there's no second, competing CSP header
+//    in play. /verify's token is scanner-driven, not risk-driven — that
+//    endpoint is public/anonymous with no session-bound side effect, so
+//    there's no real CSRF exposure there; this just satisfies StackHawk's
+//    markup check, it doesn't change who can call /api/verify or how.
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
@@ -34,8 +40,7 @@ export function proxy(request: NextRequest) {
   const csp = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ''}`,
-    // Image previews and React components use inline style attributes.
-    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
     `connect-src 'self'${dev ? ' ws: wss:' : ''}`,
@@ -47,7 +52,8 @@ export function proxy(request: NextRequest) {
   headers.set('Content-Security-Policy', csp)
   headers.set('x-nonce', nonce)
 
-  const isCsrfTokenPage = request.method === 'GET' && (pathname === '/register' || pathname === '/login')
+  const isCsrfTokenPage =
+    request.method === 'GET' && (pathname === '/register' || pathname === '/login' || pathname === '/verify')
   let csrfToken: string | null = null
   if (isCsrfTokenPage) {
     csrfToken = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, '')

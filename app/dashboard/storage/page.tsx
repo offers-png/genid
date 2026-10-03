@@ -16,6 +16,27 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
+// Literal class names (not runtime-built strings) so Tailwind's build-time
+// scan picks them all up — this is what lets the storage bar's width be
+// data-driven without an inline style="" attribute, which is what let the
+// app's CSP (proxy.ts) drop style-src's 'unsafe-inline' entirely (Oct 2026
+// HawkScan follow-up; this was the one remaining inline style in the app).
+const WIDTH_BUCKET_CLASSES = [
+  'w-[2%]', 'w-[5%]', 'w-[10%]', 'w-[15%]', 'w-[20%]', 'w-[25%]', 'w-[30%]', 'w-[35%]',
+  'w-[40%]', 'w-[45%]', 'w-[50%]', 'w-[55%]', 'w-[60%]', 'w-[65%]', 'w-[70%]', 'w-[75%]',
+  'w-[80%]', 'w-[85%]', 'w-[90%]', 'w-[95%]', 'w-[100%]',
+] as const
+
+// Snaps to the nearest 5% bucket (floor 2%, matching the old inline style's
+// Math.max(2, ...) — a near-empty session should still show a sliver, not
+// visually vanish next to a much larger one).
+function widthBucketClass(percent: number): string {
+  const clamped = Math.max(2, Math.min(100, percent))
+  if (clamped <= 2) return WIDTH_BUCKET_CLASSES[0]
+  const bucketIndex = Math.max(1, Math.min(20, Math.round(clamped / 5)))
+  return WIDTH_BUCKET_CLASSES[bucketIndex]
+}
+
 type LoadState = 'loading' | 'signed_out' | 'ready' | 'error'
 
 export default function StoragePage() {
@@ -108,8 +129,7 @@ export default function StoragePage() {
                   </div>
                   <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-violet-600 rounded-full"
-                      style={{ width: `${Math.max(2, (session.bytes / maxBytes) * 100)}%` }}
+                      className={`h-full bg-violet-600 rounded-full ${widthBucketClass((session.bytes / maxBytes) * 100)}`}
                     />
                   </div>
                   <div className="text-xs text-gray-500 mt-2">
