@@ -308,6 +308,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const pdfPath = `${sessionId}/certificate.pdf`
     await uploadToSessionBucket(pdfPath, pdfBuffer, 'application/pdf', { upsert: true })
 
+    // Oct 3 2026 OOM fix: generateCertificatePdf (just above) is the last
+    // consumer of certificateSteps' image buffers — in particular the final
+    // step's full-resolution original, which by this point also exists as
+    // c2paResult.signedImageBuffer (already uploaded) and pdfBuffer (already
+    // captured). Dropping the references here lets GC reclaim that memory
+    // before the remaining finalize work runs, instead of holding 2-3
+    // full-resolution copies simultaneously through to the end of the
+    // request. (Not released right after embedC2paManifest above —
+    // generateCertificatePdf still needs the original buffer at that point,
+    // not the C2PA-signed one, for the certificate's "Final Selection"
+    // thumbnail.)
+    for (const certStep of certificateSteps) {
+      certStep.imageBuffer = null
+    }
+
     await markStepFinal(finalStep.id, sessionId)
     if (c2paManifestId) {
       await setSessionC2paManifestId(sessionId, c2paManifestId)

@@ -99,6 +99,46 @@ describe('POST /api/session — multipart upload start (external image)', () => 
     expect(normalizedMeta.format).toBe('png')
   })
 
+  it('rejects with 400 when the uploaded image exceeds the session-pipeline dimension ceiling', async () => {
+    vi.mocked(getCallerRecord).mockResolvedValue(VERIFIED_RECORD)
+    const oversizedBuffer = await sharp({
+      create: { width: 5000, height: 100, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    })
+      .png()
+      .toBuffer()
+    const res = await POST(await uploadReq({ authorization: 'Bearer gk_live_valid', imageBuffer: oversizedBuffer }))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toMatch(/4096/)
+    expect(reservePaidOperation).not.toHaveBeenCalled()
+    expect(createSessionWithFirstStep).not.toHaveBeenCalled()
+  })
+
+  it('downscales an uploaded image larger than the session pipeline target to a 1536px max long edge', async () => {
+    vi.mocked(getCallerRecord).mockResolvedValue(VERIFIED_RECORD)
+    vi.mocked(reservePaidOperation).mockResolvedValue(true)
+    vi.mocked(createSessionWithFirstStep).mockResolvedValue({
+      session: { id: 'session-3', genid_code: 'SA12345', content_type: 'image', status: 'active', final_step_id: null, session_root_hash: null, polygon_anchor_tx: null, polygon_anchor_root_hash: null, identity_verification_tier: 'id_verified', c2pa_manifest_id: null, created_at: 'now', finalized_at: null, finalizing_since: null },
+      step: { id: 'step-3', session_id: 'session-3', step_number: 1, step_type: 'upload', edit_type: null, prompt_text: null, model_used: null, model_request_id: null, request_timestamp: 'now', response_timestamp: 'now', output_storage_path: 'session-3/step_1.png', output_hash: 'h3', prior_step_signature: null, step_hash: 'h4', step_signature: 's3', user_note: null, auto_suggested_note: null, is_final_selection: false, output_archived: false, archive_hash: null, archive_signature: null, created_at: 'now' },
+    })
+
+    // Well under the 4096px ceiling, but above the 1536px downscale target.
+    const largeBuffer = await sharp({
+      create: { width: 3000, height: 2000, channels: 3, background: { r: 100, g: 50, b: 25 } },
+    })
+      .png()
+      .toBuffer()
+    const res = await POST(await uploadReq({ authorization: 'Bearer gk_live_valid', imageBuffer: largeBuffer }))
+
+    expect(res.status).toBe(200)
+    const [, materials] = vi.mocked(createSessionWithFirstStep).mock.calls[0]
+    const normalizedMeta = await sharp(materials.outputBuffer).metadata()
+    expect(normalizedMeta.width).toBeLessThanOrEqual(1536)
+    expect(normalizedMeta.height).toBeLessThanOrEqual(1536)
+    // Aspect ratio preserved (3000x2000 = 3:2).
+    expect(normalizedMeta.width! / normalizedMeta.height!).toBeCloseTo(3000 / 2000, 1)
+  })
+
   it('authenticates via session cookie just as well as an API key (getCallerRecord handles both)', async () => {
     vi.mocked(getCallerRecord).mockResolvedValue(VERIFIED_RECORD)
     vi.mocked(reservePaidOperation).mockResolvedValue(true)

@@ -11,6 +11,19 @@ export class ValidationError extends Error {}
 export const PROMPT_MAX_LENGTH = 2000
 export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024 // 15MB
 export const MAX_IMAGE_DIMENSION_PX = 8000 // either side
+
+// Oct 3 2026 OOM fix: the session/finalize pipeline (unlike the lighter
+// /api/embed, /api/verify, /api/v1/stamp, /api/v1/verify paths above) holds
+// several full-resolution copies of the same image at once during finalize
+// — the original, the C2PA-signed re-encode, and whatever pdfkit decodes
+// internally to lay it into the PDF. On the 512MB Render instance this ran
+// out of memory on a ~2K-pixel upload (confirmed via Render's event log,
+// Oct 3 ~6:11pm), well under the shared 8000px ceiling above. Rather than
+// tightening that shared ceiling for every lighter endpoint, this is a
+// narrower pair scoped to session uploads only.
+export const SESSION_UPLOAD_MAX_DIMENSION_PX = 4096 // either side — fail fast, before any processing
+export const SESSION_UPLOAD_TARGET_LONG_EDGE_PX = 1536 // every image stored into a session is downscaled to at most this long edge
+
 export const GENERATION_RATE_LIMIT = 10
 export const GENERATION_RATE_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
 // Magic-link requests are cheap to issue but not to receive — this bounds
@@ -44,7 +57,9 @@ export function validateUploadSize(byteLength: number): void {
 
 // Catches both "absurdly large, will blow up memory/CPU in sharp" and
 // unreadable/corrupt files before they reach the actual LSB routines.
-export async function validateImageDimensions(buffer: Buffer): Promise<void> {
+// maxDimensionPx lets callers with a tighter budget (the session pipeline,
+// via SESSION_UPLOAD_MAX_DIMENSION_PX) override the shared default.
+export async function validateImageDimensions(buffer: Buffer, maxDimensionPx: number = MAX_IMAGE_DIMENSION_PX): Promise<void> {
   let meta: Metadata
   try {
     meta = await sharp(buffer).metadata()
@@ -54,8 +69,8 @@ export async function validateImageDimensions(buffer: Buffer): Promise<void> {
   if (!meta.width || !meta.height) {
     throw new ValidationError('Could not read image dimensions')
   }
-  if (meta.width > MAX_IMAGE_DIMENSION_PX || meta.height > MAX_IMAGE_DIMENSION_PX) {
-    throw new ValidationError(`Image dimensions cannot exceed ${MAX_IMAGE_DIMENSION_PX}px on either side (got ${meta.width}x${meta.height})`)
+  if (meta.width > maxDimensionPx || meta.height > maxDimensionPx) {
+    throw new ValidationError(`Image dimensions cannot exceed ${maxDimensionPx}px on either side (got ${meta.width}x${meta.height})`)
   }
 }
 

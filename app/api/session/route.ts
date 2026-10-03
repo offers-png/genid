@@ -20,6 +20,8 @@ import {
   EMBED_RATE_WINDOW_MS,
   withTimeout,
   EXTERNAL_CALL_TIMEOUT_MS,
+  SESSION_UPLOAD_MAX_DIMENSION_PX,
+  SESSION_UPLOAD_TARGET_LONG_EDGE_PX,
 } from '@/lib/limits'
 
 // The single Phase 1 Model Adapter. Swapping providers later means adding a
@@ -167,7 +169,14 @@ async function handleUploadStart(req: NextRequest) {
     const rawBuffer = Buffer.from(await imageFile.arrayBuffer())
     try {
       validateUploadSize(rawBuffer.length)
-      await validateImageDimensions(rawBuffer)
+      // Oct 3 2026 OOM fix: a tighter ceiling than the shared
+      // MAX_IMAGE_DIMENSION_PX (8000px, used by /api/embed, /api/verify,
+      // /api/v1/*) — finalize later holds several full-resolution copies of
+      // this same image at once (original, C2PA-signed re-encode, pdfkit's
+      // internal decode), which OOM-killed the 512MB instance on a ~2K
+      // upload. Checked before any resize work or paid-quota reservation so
+      // an oversized upload fails fast and cheap.
+      await validateImageDimensions(rawBuffer, SESSION_UPLOAD_MAX_DIMENSION_PX)
     } catch (err) {
       if (err instanceof ValidationError) return NextResponse.json({ error: err.message }, { status: 400 })
       throw err
@@ -188,8 +197,20 @@ async function handleUploadStart(req: NextRequest) {
     // Normalize to PNG regardless of the input format (JPEG/WebP/PNG) —
     // every downstream consumer assumes PNG bytes (C2PA embedding hardcodes
     // image/png; the OpenAI adapter and embedGenid already only ever
-    // produce PNG, for the same reason).
-    const outputBuffer = await sharp(rawBuffer).png({ compressionLevel: 9 }).toBuffer()
+    // produce PNG, for the same reason) — and downscale to a fixed max long
+    // edge (Oct 3 2026 OOM fix) so every image that ever enters the session
+    // pipeline is capped at a size finalize can safely hold several copies
+    // of, regardless of the source resolution. fit: 'inside' preserves
+    // aspect ratio; withoutEnlargement leaves already-small images alone.
+    const outputBuffer = await sharp(rawBuffer)
+      .resize({
+        width: SESSION_UPLOAD_TARGET_LONG_EDGE_PX,
+        height: SESSION_UPLOAD_TARGET_LONG_EDGE_PX,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .png({ compressionLevel: 9 })
+      .toBuffer()
     const now = new Date()
 
     const { session, step } = await createSessionWithFirstStep(record.genid_code, {
