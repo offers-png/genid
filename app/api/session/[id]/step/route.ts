@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession, getSessionSteps, createStepIfActive, isSessionNotActiveError, reservePaidOperation } from '@/lib/supabase'
-import { getAuthenticatedRecord } from '@/lib/auth'
+import { getCallerRecord } from '@/lib/apiKeys'
 import { uploadToSessionBucket, downloadFromSessionBucket, stepStoragePath, cleanupOrphanedPath } from '@/lib/storage'
 import { hashBuffer } from '@/lib/steganography'
 import { buildStepContent, computeStepHash, signStepHash } from '@/lib/chain'
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const body = await req.json()
     const { action, userNote } = body as { action?: string; userNote?: string }
 
-    const caller = await getAuthenticatedRecord(req)
+    const caller = await getCallerRecord(req)
     if (!caller) {
       return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
     }

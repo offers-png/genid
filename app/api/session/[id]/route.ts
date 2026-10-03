@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession, getSessionSteps } from '@/lib/supabase'
-import { getAuthenticatedRecord } from '@/lib/auth'
+import { getCallerRecord } from '@/lib/apiKeys'
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
 
-  const caller = await getAuthenticatedRecord(req)
+  const caller = await getCallerRecord(req)
   if (!caller) {
     return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
   }

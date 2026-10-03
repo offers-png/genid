@@ -107,7 +107,7 @@ export interface StepRecord {
   id: string
   session_id: string
   step_number: number
-  step_type: 'generate' | 'regenerate' | 'edit' | 'discard'
+  step_type: 'generate' | 'regenerate' | 'edit' | 'discard' | 'upload'
   edit_type: string | null
   prompt_text: string | null
   model_used: string | null

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { listSessionsForGenid } from '@/lib/supabase'
-import { getAuthenticatedRecord } from '@/lib/auth'
+import { getCallerRecord } from '@/lib/apiKeys'
 import { getSessionStorageBytes } from '@/lib/storage'
 
 // GET — per-session storage usage for the SIGNED-IN identity (Build Spec
@@ -10,7 +10,7 @@ import { getSessionStorageBytes } from '@/lib/storage'
 // this one does a Storage list() call per session. Previously took a bare
 // ?email= — same ownership gap as GET /api/session, fixed the same way.
 export async function GET(req: NextRequest) {
-  const record = await getAuthenticatedRecord(req)
+  const record = await getCallerRecord(req)
   if (!record) {
     return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
   }

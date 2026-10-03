@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession, getCertificateForSession } from '@/lib/supabase'
-import { getAuthenticatedRecord } from '@/lib/auth'
+import { getCallerRecord } from '@/lib/apiKeys'
 import { downloadFromSessionBucket } from '@/lib/storage'
 
 // GET — re-download an already-generated certificate straight from storage.
@@ -12,7 +12,7 @@ import { downloadFromSessionBucket } from '@/lib/storage'
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id: sessionId } = await params
 
-  const caller = await getAuthenticatedRecord(req)
+  const caller = await getCallerRecord(req)
   if (!caller) {
     return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
   }

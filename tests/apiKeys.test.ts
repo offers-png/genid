@@ -1,12 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextRequest } from 'next/server'
 
 vi.mock('@/lib/supabase', () => ({
   getAdmin: vi.fn(),
   lookupGenid: vi.fn(),
 }))
+vi.mock('@/lib/auth', () => ({
+  getAuthenticatedRecord: vi.fn(),
+}))
 
 import { getAdmin, lookupGenid } from '@/lib/supabase'
-import { createApiKey, listApiKeys, revokeApiKey, resolveApiKey } from '@/lib/apiKeys'
+import { getAuthenticatedRecord } from '@/lib/auth'
+import { createApiKey, listApiKeys, revokeApiKey, resolveApiKey, getCallerRecord } from '@/lib/apiKeys'
 
 function mockFrom(methods: Record<string, unknown>) {
   vi.mocked(getAdmin).mockReturnValue({
@@ -122,5 +127,45 @@ describe('resolveApiKey', () => {
     const record = await resolveApiKey('Bearer gk_live_validkey')
     expect(record?.genid_code).toBe('SA12345')
     expect(lookupGenid).toHaveBeenCalledWith('SA12345')
+  })
+})
+
+describe('getCallerRecord', () => {
+  function req(authorization?: string) {
+    return new NextRequest('http://localhost/api/session', {
+      headers: authorization ? { authorization } : {},
+    })
+  }
+
+  it('prefers a session cookie over an API key when both are available', async () => {
+    const viaSession = { id: '1', genid_code: 'SA_SESSION', user_name: 'Session User', email: 's@example.com', stripe_verification_id: null, verified: true, created_at: 'now' }
+    vi.mocked(getAuthenticatedRecord).mockResolvedValue(viaSession)
+    mockFrom({
+      select: () => ({ eq: () => ({ is: () => ({ maybeSingle: async () => ({ data: { id: 'key-1', genid_code: 'SA_KEY' }, error: null }) }) }) }),
+      update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+    })
+
+    const record = await getCallerRecord(req('Bearer gk_live_validkey'))
+    expect(record?.genid_code).toBe('SA_SESSION')
+  })
+
+  it('falls back to an API key when there is no session cookie', async () => {
+    vi.mocked(getAuthenticatedRecord).mockResolvedValue(null)
+    mockFrom({
+      select: () => ({ eq: () => ({ is: () => ({ maybeSingle: async () => ({ data: { id: 'key-1', genid_code: 'SA_KEY' }, error: null }) }) }) }),
+      update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+    })
+    vi.mocked(lookupGenid).mockResolvedValue({
+      id: '1', genid_code: 'SA_KEY', user_name: 'Key User', email: 'k@example.com',
+      stripe_verification_id: null, verified: true, created_at: 'now',
+    })
+
+    const record = await getCallerRecord(req('Bearer gk_live_validkey'))
+    expect(record?.genid_code).toBe('SA_KEY')
+  })
+
+  it('returns null when neither a session cookie nor a valid API key is present', async () => {
+    vi.mocked(getAuthenticatedRecord).mockResolvedValue(null)
+    expect(await getCallerRecord(req())).toBeNull()
   })
 })
