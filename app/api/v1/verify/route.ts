@@ -1,7 +1,6 @@
 import { readLimitedFormData, UploadRequestError } from '@/lib/uploads'
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyImageBuffer } from '@/lib/verification'
-import { isValidCsrfToken } from '@/lib/csrf'
 import {
   validateUploadSize,
   validateImageDimensions,
@@ -12,23 +11,28 @@ import {
   VERIFY_RATE_WINDOW_MS,
 } from '@/lib/limits'
 
-// POST multipart/form-data: { image }
-// Returns: creator info if GENID found, plus signature verification status.
-// Public and unauthenticated by design (Build Spec 5.3 — anyone can verify
-// a file with no GenID account), so there's no identity to key a DB-backed
-// limit on the way the authenticated routes do — this uses the caller's IP
-// instead, in-process (see checkInMemoryRateLimit in lib/limits.ts for the
-// tradeoffs that come with that).
+// POST /api/v1/verify — external developer API (Oct 2026). See API.md.
 //
-// The actual verification work (payload extraction, signature check,
-// content-binding lookup) lives in lib/verification.ts, shared with POST
-// /api/v1/verify (Oct 2026) — this route is now just: rate limit, CSRF
-// check (browser-form-specific, see lib/csrf.ts), parse/validate the
-// upload, and call the shared function.
+// multipart/form-data: { image }. No API key required — public and
+// anonymous by design, matching the legacy POST /api/verify (anyone can
+// verify a file with no GenID account).
+//
+// Implemented as POST, not GET: verifying requires sending the actual
+// image bytes, and a GET request body isn't reliably supported across
+// HTTP clients/fetch()/proxies, nor is it RESTful for an upload. A
+// GET-with-query-param-URL design was considered and rejected — fetching
+// an arbitrary caller-supplied URL server-side is a new SSRF surface this
+// spec didn't ask for and this change doesn't introduce. No CSRF check
+// here (unlike POST /api/verify) — that defense only applies to
+// browser-originated form submissions carrying an ambient cookie; an
+// external API caller has no such cookie to forge.
+//
+// Wraps the same verifyImageBuffer (lib/verification.ts) the legacy page
+// calls — same rate limit, same validation, shared result shape.
 export async function POST(req: NextRequest) {
   try {
     const clientIp = getClientIp(req)
-    if (!checkInMemoryRateLimit(`verify:${clientIp}`, VERIFY_RATE_LIMIT, VERIFY_RATE_WINDOW_MS)) {
+    if (!checkInMemoryRateLimit(`v1-verify:${clientIp}`, VERIFY_RATE_LIMIT, VERIFY_RATE_WINDOW_MS)) {
       return NextResponse.json(
         { error: 'Too many verification requests. Please wait a few minutes and try again.' },
         { status: 429 }
@@ -36,19 +40,10 @@ export async function POST(req: NextRequest) {
     }
 
     const formData = await readLimitedFormData(req)
-
-    // Oct 2026 fix: double-submit CSRF token (see proxy.ts / lib/csrf.ts).
-    // Scanner-driven, not risk-driven — this endpoint is public/anonymous
-    // with no session-bound side effect, so there's no real forgery to
-    // protect against here, just StackHawk's markup check.
-    if (!isValidCsrfToken(req, formData.get('csrfToken'))) {
-      return NextResponse.json({ error: 'Your session has expired. Please reload the page and try again.' }, { status: 403 })
-    }
-
     const imageFile = formData.get('image')
 
     if (!(imageFile instanceof File)) {
-      return NextResponse.json({ error: 'Image file is required' }, { status: 400 })
+      return NextResponse.json({ error: 'Image is required (multipart/form-data field "image")' }, { status: 400 })
     }
 
     validateUploadSize(imageFile.size)
