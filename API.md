@@ -167,7 +167,7 @@ externally-generated image through the full pipeline" means in practice.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `image` | file | yes | JPEG, PNG, or WebP. Max 15 MB, max 8000px on either side. Re-encoded to PNG internally regardless of input format — every downstream step (C2PA embedding in particular) assumes PNG. |
+| `image` | file | yes | JPEG, PNG, or WebP. Max 15 MB, max 4096px on either side (tighter than the 8000px stamp/verify limit above — finalize holds multiple full-resolution copies of this image at once). Re-encoded to PNG internally regardless of input format, and downscaled to a 1536px max long edge — every downstream step (C2PA embedding in particular) assumes PNG, and the resize keeps finalize's memory use bounded regardless of the source resolution. |
 
 **Response — 200**
 
