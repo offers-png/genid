@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "GenID Protocol — Certify Image",
+  "version": "1.0.0",
+  "description": "Right-click any AI-generated image to run it through the GenID authorship certification pipeline (Polygon anchor, C2PA manifest, certificate PDF) — no download/upload required.",
+  "permissions": ["contextMenus", "storage", "downloads", "notifications"],
+  "host_permissions": [
+    "https://genid.onrender.com/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "GenID Protocol"
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

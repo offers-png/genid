@@ -25,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/session" className="hover:text-white transition-colors">Create Session</Link>
               <Link href="/verify" className="hover:text-white transition-colors">Verify</Link>
               <Link href="/embed" className="hover:text-white transition-colors">Stamp</Link>
+              <Link href="/extension" className="hover:text-white transition-colors">Extension</Link>
               <Link href="/dashboard" className="hover:text-white transition-colors">Dashboard</Link>
               <Link href="/register" className="bg-violet-600 hover:bg-violet-500 text-white px-4 py-1.5 rounded-md transition-colors text-sm">
                 Get GENID

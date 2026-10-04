@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>GenID Protocol</title>
+  <style>
+    body { font-family: -apple-system, Segoe UI, Arial, sans-serif; width: 300px; padding: 16px; color: #1a1a1a; }
+    h2 { font-size: 15px; margin: 0 0 10px; }
+    p { font-size: 12px; color: #555; line-height: 1.5; margin: 0 0 10px; }
+    .result { background: #f6f6f6; border-radius: 8px; padding: 10px; font-size: 12px; margin-top: 10px; word-break: break-all; }
+    .result a { color: #0a63c9; }
+    .empty { font-size: 12px; color: #888; }
+    button { width: 100%; padding: 8px; margin-top: 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; font-size: 12px; }
+    button:hover { background: #f0f0f0; }
+  </style>
+</head>
+<body>
+  <h2>GenID Protocol</h2>
+  <p>Right-click any AI-generated image on any website → <strong>Certify with GenID</strong>. The full pipeline runs automatically and the certificate PDF downloads itself.</p>
+
+  <div id="resultBox" class="empty">No certifications yet this session.</div>
+
+  <button id="openOptions">Settings</button>
+
+  <script src="popup.js"></script>
+</body>
+</html>
