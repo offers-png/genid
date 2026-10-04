@@ -152,13 +152,16 @@ export default function DashboardPage() {
           </div>
 
           {/* Actions */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <a href="/embed" className="bg-violet-600 hover:bg-violet-500 text-white py-3 rounded-lg font-medium transition-colors text-center">
               Stamp New Image
             </a>
             <a href="/verify" className="border border-gray-700 hover:border-gray-500 text-gray-300 py-3 rounded-lg font-medium transition-colors text-center">
               Verify an Image
             </a>
+            <Link href="/extension" className="border border-gray-700 hover:border-gray-500 text-gray-300 py-3 rounded-lg font-medium transition-colors text-center">
+              Get Chrome Extension
+            </Link>
           </div>
 
           {/* Sessions */}
