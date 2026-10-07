@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import './globals.css'
+import CookieNotice from './components/CookieNotice'
 
 // CSP nonces must be generated at request time, never cached in static HTML.
 export const dynamic = 'force-dynamic'
@@ -35,8 +36,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </nav>
         <main className="flex-1">{children}</main>
         <footer className="border-t border-gray-800 py-8 text-center text-xs text-gray-600">
+          <div className="flex items-center justify-center gap-4 mb-3">
+            <Link href="/privacy" className="hover:text-gray-400 transition-colors">Privacy</Link>
+            <Link href="/terms" className="hover:text-gray-400 transition-colors">Terms</Link>
+            <Link href="/dpa" className="hover:text-gray-400 transition-colors">DPA</Link>
+            <Link href="/subprocessors" className="hover:text-gray-400 transition-colors">Subprocessors</Link>
+          </div>
           GENID Protocol &copy; {new Date().getFullYear()} DealDily &mdash; Patent Pending &mdash; Confidential
         </footer>
+        <CookieNotice />
       </body>
     </html>
   )

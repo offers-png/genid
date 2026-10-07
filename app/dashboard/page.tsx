@@ -41,6 +41,10 @@ export default function DashboardPage() {
   const [record, setRecord] = useState<GenidRecord | null>(null)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [error, setError] = useState('')
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -86,6 +90,29 @@ export default function DashboardPage() {
   async function handleSignOut() {
     await fetch('/api/auth/logout', { method: 'POST' })
     router.push('/login')
+  }
+
+  async function handleDeleteAccount() {
+    if (!record) return
+    setDeleting(true)
+    setDeleteError('')
+    try {
+      const res = await fetch('/api/account/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmGenidCode: record.genidCode }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setDeleteError(data.error ?? 'Failed to delete account')
+        setDeleting(false)
+        return
+      }
+      router.push('/')
+    } catch {
+      setDeleteError('Network error — please try again')
+      setDeleting(false)
+    }
   }
 
   return (
@@ -270,6 +297,72 @@ export default function DashboardPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+
+          {/* Privacy */}
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            <h2 className="text-lg font-semibold text-white mb-1">Privacy</h2>
+            <p className="text-xs text-gray-500 mb-4">
+              See our <Link href="/privacy" className="text-violet-400 hover:text-violet-300">Privacy Policy</Link> for
+              what we collect and why.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <a
+                href="/api/account/export"
+                className="border border-gray-700 hover:border-gray-500 text-gray-300 px-4 py-2 rounded-lg text-sm transition-colors"
+              >
+                Export my data
+              </a>
+              {!deleteConfirmOpen ? (
+                <button
+                  onClick={() => setDeleteConfirmOpen(true)}
+                  className="border border-red-900 hover:border-red-700 text-red-400 px-4 py-2 rounded-lg text-sm transition-colors"
+                >
+                  Delete my account
+                </button>
+              ) : null}
+            </div>
+
+            {deleteConfirmOpen && (
+              <div className="mt-4 bg-red-950/30 border border-red-900 rounded-lg p-4">
+                <p className="text-sm text-red-300 mb-2">
+                  This is irreversible. It deletes any session you never finalized (including its stored
+                  images), revokes every API key, and clears your name and email from your account — your
+                  GENID code stays only so far as it&apos;s needed for the hash-chain proofs behind any
+                  certificate you already finalized to keep working for third parties checking it.
+                </p>
+                <p className="text-sm text-gray-400 mb-3">
+                  Type your GENID code (<span className="font-mono text-gray-300">{record.genidCode}</span>) to confirm.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={deleteConfirmInput}
+                    onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                    placeholder={record.genidCode}
+                    className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-600 focus:outline-none focus:border-red-600 transition-colors font-mono"
+                  />
+                  <button
+                    onClick={handleDeleteAccount}
+                    disabled={deleteConfirmInput !== record.genidCode || deleting}
+                    className="bg-red-700 hover:bg-red-600 disabled:bg-red-950 disabled:text-red-700 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    {deleting ? 'Deleting…' : 'Permanently delete'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setDeleteConfirmOpen(false)
+                      setDeleteConfirmInput('')
+                      setDeleteError('')
+                    }}
+                    className="text-gray-400 hover:text-gray-300 text-sm px-2"
+                  >
+                    Cancel
+                  </button>
+                </div>
+                {deleteError && <div className="text-sm text-red-400 mt-2">{deleteError}</div>}
               </div>
             )}
           </div>

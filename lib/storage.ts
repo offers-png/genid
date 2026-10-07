@@ -99,3 +99,22 @@ export async function getSessionStorageBytes(sessionId: string): Promise<number>
   if (error || !data) return 0
   return data.reduce((sum, file) => sum + (file.metadata?.size ?? 0), 0)
 }
+
+// Deletes every object under a session's storage prefix (step outputs,
+// archive copies, certificate PDF, C2PA export) — used by lib/account.ts
+// to fully clean up a NEVER-FINALIZED session on account deletion. Never
+// called for a finalized session: once a certificate exists, a third party
+// may already be relying on its stored image to re-verify output_hash
+// (lib/verify.ts downloads and rehashes it) — deleting that file would make
+// a legitimate, untampered certificate start reporting as unverified
+// instead of just "image withheld," which is a worse outcome than not
+// deleting it. Best-effort per object, matching cleanupOrphanedPath.
+export async function deleteAllSessionStorageObjects(sessionId: string): Promise<void> {
+  const { data, error } = await getAdmin().storage.from(BUCKET).list(sessionId)
+  if (error || !data || data.length === 0) return
+  const paths = data.map((file) => `${sessionId}/${file.name}`)
+  const { error: removeError } = await getAdmin().storage.from(BUCKET).remove(paths)
+  if (removeError) {
+    console.error(`Failed to delete storage objects for session ${sessionId}:`, removeError.message)
+  }
+}

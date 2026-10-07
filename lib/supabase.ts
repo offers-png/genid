@@ -22,6 +22,7 @@ export interface GenidRecord {
   stripe_verification_id: string | null
   verified: boolean
   created_at: string
+  deleted_at?: string | null
 }
 
 export interface ContentLogRecord {
@@ -465,4 +466,36 @@ export async function getCertificatesForSessions(sessionIds: string[]): Promise<
   const { data, error } = await getAdmin().from('genid_certificates').select('*').in('session_id', sessionIds)
   if (error || !data) return []
   return data as CertificateRecord[]
+}
+
+// Deletes a session's DB rows outright — only ever called by
+// lib/account.ts for a session with status 'active' (never finalized, so
+// no certificate or third-party-visible proof references it yet). Steps
+// are deleted first since genid_steps.session_id references
+// genid_sessions(id).
+export async function deleteSessionRows(sessionId: string): Promise<void> {
+  const admin = getAdmin()
+  const { error: stepsError } = await admin.from('genid_steps').delete().eq('session_id', sessionId)
+  if (stepsError) throw new Error(`Failed to delete session steps: ${stepsError.message}`)
+  const { error: sessionError } = await admin.from('genid_sessions').delete().eq('id', sessionId)
+  if (sessionError) throw new Error(`Failed to delete session: ${sessionError.message}`)
+}
+
+// Account deletion (Oct 2026 compliance pass) — see migration
+// 019_account_deletion.sql and lib/account.ts for why this anonymizes
+// rather than deletes the row outright. email is set to a unique
+// tombstone (the column is UNIQUE NOT NULL) so the real address is freed
+// up and no magic link can ever resolve to this record again.
+export async function anonymizeGenidRecord(genidCode: string): Promise<void> {
+  const { error } = await getAdmin()
+    .from('genid_registry')
+    .update({
+      user_name: '[deleted]',
+      self_reported_name: null,
+      email: `deleted-${genidCode.toLowerCase()}-${Date.now()}@deleted.genid.invalid`,
+      deleted_at: new Date().toISOString(),
+    })
+    .eq('genid_code', genidCode)
+
+  if (error) throw new Error(`Failed to anonymize account: ${error.message}`)
 }

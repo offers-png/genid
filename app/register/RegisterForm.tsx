@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 
 type Step = 'form' | 'awaiting_confirmation'
 
@@ -20,6 +21,7 @@ function RegisterFormInner({ csrfToken }: { csrfToken: string }) {
   const [step, setStep] = useState<Step>('form')
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
+  const [acceptedTerms, setAcceptedTerms] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -42,7 +44,7 @@ function RegisterFormInner({ csrfToken }: { csrfToken: string }) {
       const res = await fetch('/api/register/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullName, email, csrfToken }),
+        body: JSON.stringify({ fullName, email, acceptedTerms, csrfToken }),
       })
       const data = await res.json()
 
@@ -120,12 +122,31 @@ function RegisterFormInner({ csrfToken }: { csrfToken: string }) {
             className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-violet-500 transition-colors"
           />
         </div>
+        <label className="flex items-start gap-2 text-xs text-gray-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={acceptedTerms}
+            onChange={(e) => setAcceptedTerms(e.target.checked)}
+            className="mt-0.5 accent-violet-600"
+          />
+          <span>
+            I agree to the{' '}
+            <Link href="/terms" target="_blank" className="text-violet-400 hover:text-violet-300">
+              Terms of Service
+            </Link>{' '}
+            and{' '}
+            <Link href="/privacy" target="_blank" className="text-violet-400 hover:text-violet-300">
+              Privacy Policy
+            </Link>
+            .
+          </span>
+        </label>
         {error && (
           <div className="bg-red-950/50 border border-red-800 rounded-lg p-3 text-sm text-red-300">{error}</div>
         )}
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || !acceptedTerms}
           className="w-full bg-violet-600 hover:bg-violet-500 disabled:bg-violet-800 disabled:cursor-not-allowed text-white py-3 rounded-lg font-medium transition-colors"
         >
           {loading ? 'Sending...' : 'Confirm Email to Continue →'}

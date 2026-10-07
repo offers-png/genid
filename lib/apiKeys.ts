@@ -78,6 +78,19 @@ export async function revokeApiKey(genidCode: string, keyId: string): Promise<bo
   return (data?.length ?? 0) > 0
 }
 
+// Revokes every live key for an identity in one call — used by account
+// deletion (lib/account.ts), where leaving even one key active would let
+// API traffic keep authenticating as a "deleted" account.
+export async function revokeAllApiKeys(genidCode: string): Promise<void> {
+  const { error } = await getAdmin()
+    .from('genid_api_keys')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('genid_code', genidCode)
+    .is('revoked_at', null)
+
+  if (error) throw new Error(`Failed to revoke API keys: ${error.message}`)
+}
+
 // Resolves a Bearer token to the same GenidRecord shape
 // getAuthenticatedRecord (lib/auth.ts) produces from a session cookie, so
 // every downstream check (record.verified, reservePaidOperation keyed by

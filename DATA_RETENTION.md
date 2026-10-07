@@ -94,14 +94,41 @@ for whether a given session has one).
 
 ## Account & session deletion
 
-**There is currently no deletion capability in the product** — no "delete my
-account" or "delete this session" endpoint exists in the codebase as of this
-writing. Retention is, in practice, indefinite for every record above. If you
-need to support account deletion (e.g., for a privacy request), that requires
-new work: removing or anonymizing `genid_registry`/`genid_sessions`/
-`genid_steps` rows and their Storage objects, and deciding how to handle rows
-already referenced by a certificate or C2PA export someone else may hold a
-copy of.
+As of Oct 2026 (`POST /api/account/delete`, `lib/account.ts`), a user can
+delete their own account from the dashboard. What it actually does:
+
+- **Active (never-finalized) sessions:** deleted outright — DB rows (steps
+  and the session) and every Storage object under that session's prefix.
+  Nothing outside GenID could be relying on a session that was never
+  certified, so there's no proof-integrity reason to keep any of it.
+- **Finalized sessions: DB rows and Storage objects are left untouched.**
+  This is the one deliberate exception, and it exists because
+  `lib/verify.ts` downloads and rehashes a finalized step's stored file to
+  prove it hasn't been tampered with — deleting that file would make an
+  otherwise-legitimate, untampered certificate start reporting as
+  **unverified/tampered**, which is a worse and more misleading outcome
+  than leaving the file in place. Correctly distinguishing "deliberately
+  withdrawn by the creator" from "tampered" in the verification result
+  would need a real extension to `lib/verify.ts` (a new column + a third
+  verification outcome, not a boolean) — that's genuine follow-up work,
+  not done here.
+- **The registry row:** anonymized, not deleted — `user_name` and
+  `self_reported_name` are cleared, `email` is overwritten with a unique
+  tombstone value (freeing the real address for reuse and ensuring no
+  future magic link can resolve to this record). `genid_code` and
+  `verified` are left as-is, since `genid_sessions`/`genid_steps`/
+  `genid_certificates` reference `genid_code`, and a finalized session's
+  public verify page reads the registry row live — so this anonymization
+  is what actually removes the identifying name from every certificate
+  this account ever finalized, past or future.
+- **API keys:** all revoked.
+- **Session cookie:** cleared by the route handler; `deleted_at` being set
+  also makes `resolveSessionCookie` (`lib/auth.ts`) reject the cookie
+  outright even before it would otherwise expire.
+
+See `lib/account.ts` for the full implementation and the reasoning inline.
+A finalized certificate's Polygon anchor, if it has one, is still exactly as
+permanent as described below — deletion cannot and does not touch it.
 
 ## Non-payment / subscription lapse
 

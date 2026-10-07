@@ -45,7 +45,10 @@ function req(body: Record<string, unknown>, ip?: string) {
       Cookie: `genid_csrf=${CSRF_TOKEN}`,
       ...(ip ? { 'x-forwarded-for': ip } : {}),
     },
-    body: JSON.stringify({ csrfToken: CSRF_TOKEN, ...body }),
+    // acceptedTerms: true by default so every test below exercises its own
+    // thing, not the Oct 2026 TOS-acceptance check (covered separately) —
+    // tests for that check override it explicitly.
+    body: JSON.stringify({ csrfToken: CSRF_TOKEN, acceptedTerms: true, ...body }),
   })
 }
 
@@ -144,6 +147,27 @@ describe('POST /api/register/start', () => {
 
     const blocked = await registerStart(req({ fullName: FULL_NAME, email: 'one-more@example.com' }, ip))
     expect(blocked.status).toBe(429)
+  })
+
+  // Dedicated IP (not the shared 'unknown' bucket every other test above
+  // uses) — otherwise these three extra calls push the 'unknown' bucket
+  // over REGISTRATION_IP_RATE_LIMIT by the time the CSRF test below runs,
+  // same reasoning as the dedicated-IP rate-limit test further down.
+  it('rejects with 400 when acceptedTerms is missing or not literally true, without creating a registry row', async () => {
+    mockRegistryChain(null)
+    const ip = '203.0.113.51'
+
+    const missing = await registerStart(req({ fullName: FULL_NAME, email: EMAIL, acceptedTerms: undefined }, ip))
+    expect(missing.status).toBe(400)
+
+    const falsey = await registerStart(req({ fullName: FULL_NAME, email: EMAIL, acceptedTerms: false }, ip))
+    expect(falsey.status).toBe(400)
+
+    const truthyString = await registerStart(req({ fullName: FULL_NAME, email: EMAIL, acceptedTerms: 'true' }, ip))
+    expect(truthyString.status).toBe(400)
+
+    expect(issueUniqueGenid).not.toHaveBeenCalled()
+    expect(createMagicLinkToken).not.toHaveBeenCalled()
   })
 
   it('rejects with 403 when the CSRF token is missing or does not match the cookie', async () => {
