@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const { fullName, email, csrfToken } = await req.json()
+    const { fullName, email, acceptedTerms, csrfToken } = await req.json()
 
     // Oct 2026 fix: double-submit CSRF token (see proxy.ts / lib/csrf.ts) —
     // confirms this submission actually came from a page load of /register
@@ -66,6 +66,13 @@ export async function POST(req: NextRequest) {
 
     if (!fullName || !email) {
       return NextResponse.json({ error: 'Name and email are required' }, { status: 400 })
+    }
+
+    // Oct 2026 compliance fix: the form's checkbox already disables submit
+    // until checked, but that's client-side only — enforce it here too so
+    // a direct API call can't skip acceptance.
+    if (acceptedTerms !== true) {
+      return NextResponse.json({ error: 'You must accept the Terms of Service and Privacy Policy to register.' }, { status: 400 })
     }
 
     const { data: existing } = await supabaseAdmin

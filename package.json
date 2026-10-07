@@ -11,7 +11,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "build:extension": "./scripts/build-extension.sh"
+    "build:extension": "./scripts/build-extension.sh",
+    "check:licenses": "license-checker-rseidelsohn --production --onlyAllow 'MIT;Apache-2.0;Apache 2.0;BSD;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;CC0-1.0;CC-BY-4.0;Unlicense;Python-2.0;LGPL-3.0-or-later' --excludePrivatePackages --excludePackages 'buffers@0.1.1' --summary"
   },
   "dependencies": {
     "@contentauth/c2pa-node": "^0.8.3",
@@ -34,6 +35,7 @@
     "@types/sharp": "^0.31.1",
     "eslint": "^9",
     "eslint-config-next": "^16.3.8",
+    "license-checker-rseidelsohn": "^4.4.2",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^5.0.1"

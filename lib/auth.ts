@@ -108,6 +108,14 @@ export async function resolveSessionCookie(cookieValue: string | undefined): Pro
 
   const record = await lookupByEmail(payload.email)
   if (!record || record.genid_code !== payload.genidCode) return null
+  // A deleted account's session cookie must stop working immediately, not
+  // merely expire on its own 30-day TTL — deleteAccount (lib/account.ts)
+  // also tombstones the email this lookup is keyed on, so in practice a
+  // deleted account's cookie already fails the lookup above; this check
+  // covers the case where the cookie's own stored email still happens to
+  // match (e.g. a lookup by the now-freed tombstone email never matches a
+  // real row, but belt-and-suspenders against any future lookup change).
+  if (record.deleted_at) return null
   return record
 }
 
